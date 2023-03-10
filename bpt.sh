@@ -14,10 +14,11 @@ readonly __DEFINED_BPT_SH=1
 #   <state>,<token> and the value actions (s <k>/r <rule>/a/<k>).
 # $2: Scanner function (default to cat, i.e. read from stdin)
 #   The scanner should output <token-type> \n <token-content> per token read.
-# $3: Reduce function hook (side effect ineffective except I/O)
+# $3: Reduce function hook
 #   Args that passed to this function:
 #     $1: The reduce rule (as a string). i.e. "LHS RHS1 RHS2 ..."
 #     ${@:1}: RHS contents.
+#   The reduce function should store the reduce result to the `result` variable.
 # $4: (optional) If set, enable debug.
 shlr.parse() (
     local -rn table="$1"
@@ -47,7 +48,7 @@ shlr.parse() (
         local -a rule=()
         read -ra rule <<<"$1"
         local num_rhs=$((${#rule[@]} - 1))
-        local -a args=("${contents[@]:${#contents[@]}-${num_rhs}}")
+        local -a args=("${contents[@]:${#contents[@]}-$num_rhs}")
 
         # Reduce
         states=("${states[@]:0:${#states[@]}-$num_rhs}")
@@ -57,13 +58,9 @@ shlr.parse() (
         states+=("${table["${states[@]:${#states[@]}-1},${rule[0]}"]}")
 
         # Command substitution discards newlines. We need to preserve them.
-        result="$(
-            $reduce_fn "$1" "${args[@]}"
-            r=$?
-            echo .
-            exit "$r"
-        )"
-        contents+=("${result%.}")
+        local result=''
+        $reduce_fn "$1" "${args[@]}"
+        contents+=("${result}")
     }
 
     # Simply print the result
@@ -74,10 +71,10 @@ shlr.parse() (
 
     while true; do
         [[ -n $token ]] || {
-            local OLDIFS="$IFS" && IFS=''
+            local OIFS="$IFS" && IFS=''
             read -r token
             read -r content
-            IFS="$OLDIFS"
+            IFS="$OIFS"
         }
 
         action="${table["${states[@]:${#states[@]}-1},$token"]}"
@@ -260,10 +257,9 @@ bpt.__reduce_collect_vars() {
     local -a rule=() contents=("${@:2}")
     read -ra rule <<<"$1"
     case "${rule[0]}" in
-    STR) ;;
-    VAR) echo -n "${contents[1]}" ;;
-    STMT) [[ ${rule[1]} != VAR ]] || echo "${contents[0]}" ;;
-    *) printf "%s" "${contents[@]}" ;;
+    VAR) result="${contents[1]}" ;;
+    STMT) [[ ${rule[1]} != VAR ]] || result="${contents[0]}"$'\n' ;;
+    *) printf -v result "%s" "${contents[@]}" ;;
     esac
 }
 
@@ -271,10 +267,10 @@ bpt.__reduce_collect_includes() {
     local -a rule=() contents=("${@:2}")
     read -ra rule <<<"$1"
     case "${rule[0]}" in
-    STR) echo -n "${contents[0]}" ;;
-    INCLUDE) echo -n "${contents[2]}" ;;
-    STMT) [[ ${rule[1]} != INCLUDE ]] || echo "${contents[0]}" ;;
-    *) printf "%s" "${contents[@]}" ;;
+    STR) result="${contents[0]}" ;;
+    INCLUDE) result="${contents[2]}" ;;
+    STMT) [[ ${rule[1]} != INCLUDE ]] || result="${contents[0]}"$'\n' ;;
+    *) printf -v result "%s" "${contents[@]}" ;;
     esac
 }
 
@@ -283,10 +279,10 @@ bpt.__reduce_collect_toplevel_strings() {
     local -a rule=() contents=("${@:2}")
     read -ra rule <<<"$1"
     case "${rule[0]}" in
-    STR) echo -n "${contents[0]}" ;;
-    NL) echo ;;
-    STMT) [[ ${rule[1]} != STR ]] || echo -n "${contents[0]}" ;;
-    *) printf "%s" "${contents[@]}" ;;
+    STR) result="${contents[0]}" ;;
+    NL) result=$'\n' ;;
+    STMT) [[ ${rule[1]} != STR ]] || result="${contents[0]}" ;;
+    *) printf -v result "%s" "${contents[@]}" ;;
     esac
 }
 
@@ -294,13 +290,14 @@ bpt.__reduce_collect_toplevel_strings() {
 bpt.__reduce_generate() {
     local -a rule=() contents=("${@:2}")
     read -ra rule <<<"$1"
+
     case "${rule[0]}" in
-    NL) echo ;;
-    STR) echo -n "${contents[0]}" ;;
-    IDENTIFIER) echo -n "${contents[0]}" ;;
-    VAR) echo -n "\${${contents[1]}}" ;;
-    INCLUDE) echo -n "$(__recursive_process <"${contents[2]}")" ;;
-    FORIN) echo -n "for ${contents[2]} in \$(${contents[4]}); do ${contents[6]} done" ;;
+    NL) result=$'\n' ;;
+    STR) result="${contents[0]}" ;;
+    IDENTIFIER) result="${contents[0]}" ;;
+    VAR) result="\${${contents[1]}}" ;;
+    INCLUDE) result="$(__recursive_process <"${contents[2]}")" ;;
+    FORIN) result="for ${contents[2]} in \$(${contents[4]}); do ${contents[6]} done" ;;
     BOOL)
         # Strip the tag from STMT
         local stmt_l_type="${contents[0]%%:*}"
@@ -312,7 +309,6 @@ bpt.__reduce_generate() {
         VAR) contents[0]="\"$stmt_l\"" ;;
         *) contents[0]="\$(${stmt_l})" ;;
         esac
-
         # If rule is STMT op STMT, deal with op and RHS
         [[ ${#rule[@]} -eq 2 ]] || {
             local stmt_r_type="${contents[2]%%:*}"
@@ -326,27 +322,26 @@ bpt.__reduce_generate() {
             esac
             contents[1]="-${rule[2]}"
         }
-
-        echo -n "[[ ${contents[*]} ]]"
+        printf -v result "%s" "[[ " "${contents[@]}" " ]]"
         ;;
     BOOLS)
         if [[ ${#rule[@]} -eq 2 ]]; then
-            echo -n "${contents[0]}"
+            result="${contents[0]}"
         else
             case "${rule[2]}" in
-            and) echo -n "${contents[0]} && ${contents[2]}" ;;
-            or) echo -n "${contents[0]} || ${contents[2]}" ;;
+            and) result="${contents[0]} && ${contents[2]}" ;;
+            or) result="${contents[0]} || ${contents[2]}" ;;
             esac
         fi
         ;;
-    ELSE) [[ ${#rule[@]} -eq 1 ]] || echo -n "else ${contents[2]}" ;;
+    ELSE) [[ ${#rule[@]} -eq 1 ]] || result="else ${contents[2]}" ;;
     ELIF) [[ ${#rule[@]} -eq 1 ]] ||
-        echo -n "${contents[0]}; elif ${contents[2]}; then ${contents[4]}" ;;
-    IF) echo -n "if ${contents[2]}; then ${contents[*]:4:3} fi" ;;
+        result="${contents[0]}; elif ${contents[2]}; then ${contents[4]}" ;;
+    IF) result="if ${contents[2]}; then ${contents[*]:4:3} fi" ;;
     STMT)
         # Tag the sub-type to the reduce result
         # (Need to strip the tag wherever STMT is used)
-        echo -n "${rule[1]}:${contents[0]}"
+        result="${rule[1]}:${contents[0]}"
         ;;
     DOCUMENT)
         # Return when document is empty
@@ -358,15 +353,14 @@ bpt.__reduce_generate() {
         contents[1]="$stmt"
 
         # Reduce the document
-        echo -n "${contents[0]}"
+        result="${contents[0]}"
         case "$stmt_type" in
-        STR | IDENTIFIER) echo -n "{ echo -n $(printf %q "${contents[1]}"); };" ;;
-        VAR) echo -n "{ echo -n \"${contents[1]}\"; };" ;;
-        INCLUDE) echo -n "${contents[1]}" ;;
-        FORIN | IF) echo -n "{ ${contents[1]}; };" ;;
+        STR | IDENTIFIER) result+="{ echo -n $(printf %q "${contents[1]}"); };" ;;
+        VAR) result+="{ echo -n \"${contents[1]}\"; };" ;;
+        INCLUDE) result+="${contents[1]}" ;;
+        FORIN | IF) result+="{ ${contents[1]}; };" ;;
         esac
         ;;
-    # DOCUMENT) printf "%s" "${contents[@]}" ;;
     *) echo "Internal error: Rule ${rule[*]} not recognized" >&2 ;;
     esac
 }
