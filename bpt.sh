@@ -27,7 +27,7 @@ shlr.parse() (
     if [[ -n $4 ]]; then local -r NDEBUG=false; else local -r NDEBUG=true; fi
 
     # Parse stack and associatied content stack
-    local -a states=(0) contents=()
+    local -a states=(0) contents=('')
 
     # Look-ahead token and its content
     local token='' content=''
@@ -68,7 +68,7 @@ shlr.parse() (
     # Simply print the result
     __accept() {
         $NDEBUG || echo "[DBG] Result accepted" >&2
-        echo "${contents[0]}"
+        printf '%s' "${contents[@]}"
     }
 
     while true; do
@@ -263,7 +263,7 @@ bpt.__reduce_collect_vars() {
 
     case "${rule[0]}" in
     VAR) result="$2" ;;
-    STMT) [[ ${rule[1]} != VAR ]] || result="$1"$'\n' ;;
+    STMT) case ${rule[1]} in VAR) result="$1"$'\n' ;; *) result='' ;; esac ;;
     *) printf -v result "%s" "${@}" ;;
     esac
 }
@@ -276,7 +276,7 @@ bpt.__reduce_collect_includes() {
     case "${rule[0]}" in
     STR) result="$1" ;;
     INCLUDE) result="$3" ;;
-    STMT) [[ ${rule[1]} != INCLUDE ]] || result="$1"$'\n' ;;
+    STMT) case ${rule[1]} in INCLUDE) result="$1"$'\n' ;; *) result='' ;; esac ;;
     *) printf -v result "%s" "$@" ;;
     esac
 }
@@ -290,7 +290,7 @@ bpt.__reduce_collect_toplevel_strings() {
     case "${rule[0]}" in
     STR) result="$1" ;;
     NL) result=$'\n' ;;
-    STMT) [[ ${rule[1]} != STR ]] || result="$1" ;;
+    STMT) case ${rule[1]} in STR) result="$1"$'\n' ;; *) result='' ;; esac ;;
     *) printf -v result "%s" "$@" ;;
     esac
 }
@@ -334,18 +334,28 @@ bpt.__reduce_generate() {
         printf -v result "%s" "[[ " "${contents[@]}" " ]]"
         ;;
     BOOLS)
-        if [[ ${#rule[@]} -eq 2 ]]; then
-            result="$1"
-        else
+        case ${#rule[@]} in
+        2) result="$1" ;;
+        *)
             case "${rule[2]}" in
             and) result="$1 && $3" ;;
             or) result="$1 || $3" ;;
             esac
-        fi
+            ;;
+        esac
         ;;
-    ELSE) [[ ${#rule[@]} -eq 1 ]] || result="else $3" ;;
-    ELIF) [[ ${#rule[@]} -eq 1 ]] ||
-        result="$1; elif $3; then $5" ;;
+    ELSE)
+        case ${#rule[@]} in
+        1) result='' ;;
+        *) result="else $3" ;;
+        esac
+        ;;
+    ELIF)
+        case ${#rule[@]} in
+        1) result='' ;;
+        *) result="$1; elif $3; then $5" ;;
+        esac
+        ;;
     IF) result="if $3; then ${*:5:3} fi" ;;
     STMT)
         # Tag the sub-type to the reduce result
@@ -354,7 +364,10 @@ bpt.__reduce_generate() {
         ;;
     DOCUMENT)
         # Return when document is empty
-        [[ ${#rule[@]} -ne 1 ]] || return
+        [[ ${#rule[@]} -ne 1 ]] || {
+            result=''
+            return
+        }
 
         # Strip the tag from STMT
         local stmt_type="${2%%:*}"
