@@ -48,18 +48,20 @@ shlr.parse() (
         local -a rule=()
         read -ra rule <<<"$1"
         local num_rhs=$((${#rule[@]} - 1))
-        local -a args=("${contents[@]:${#contents[@]}-$num_rhs}")
 
-        # Reduce
+        # Reduce and goto state
         states=("${states[@]:0:${#states[@]}-$num_rhs}")
-        contents=("${contents[@]:0:${#contents[@]}-$num_rhs}")
-
-        # Goto state and save reduced content
         states+=("${table["${states[@]:${#states[@]}-1},${rule[0]}"]}")
 
-        # Command substitution discards newlines. We need to preserve them.
+        # Run reduce hook, discard reduced contents, and save the reduce result
         local result=''
-        $reduce_fn "$1" "${args[@]}"
+        $reduce_fn "$1" "${contents[@]:${#contents[@]}-$num_rhs}"
+
+        # The following is faster than:
+        #   contents=("${contents[@]:0:${#contents[@]}-$num_rhs}")
+        # since it avoides copy large strings.
+        local i=0 b=$((${#contents[@]} - 1)) e=$((${#contents[@]} - num_rhs))
+        for ((i = b; i >= e; --i)); do unset "contents[$i]"; done
         contents+=("${result}")
     }
 
