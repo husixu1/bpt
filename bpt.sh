@@ -54,15 +54,14 @@ shlr.parse() (
         states+=("${table["${states[@]:${#states[@]}-1},${rule[0]}"]}")
 
         # Run reduce hook, discard reduced contents, and save the reduce result
-        local result=''
+        local -n result="contents[$((${#contents[@]} - num_rhs))]"
         $reduce_fn "$1" "${contents[@]:${#contents[@]}-$num_rhs}"
 
         # The following is faster than:
         #   contents=("${contents[@]:0:${#contents[@]}-$num_rhs}")
         # since it avoides copy large strings.
-        local i=0 b=$((${#contents[@]} - 1)) e=$((${#contents[@]} - num_rhs))
+        local i=0 b=$((${#contents[@]} - 1)) e=$((${#contents[@]} - num_rhs + 1))
         for ((i = b; i >= e; --i)); do unset "contents[$i]"; done
-        contents+=("${result}")
     }
 
     # Simply print the result
@@ -309,29 +308,28 @@ bpt.__reduce_generate() {
     INCLUDE) result="$(__recursive_process <"$3")" ;;
     FORIN) result="for $3 in \$($5); do $7 done" ;;
     BOOL)
+        # Don't use the name contents (avoid nameref collision)
+        local -a rhss=()
         # Strip the tag from STMT
         local stmt_l_type="${1%%:*}"
         local stmt_l="${1#*:}"
-        local -a contents=()
         case $stmt_l_type in
-        IDENTIFIER | STR) contents[0]="\$(echo -n $(printf %q "${stmt_l}"))" ;;
-        VAR) contents[0]="\"$stmt_l\"" ;;
-        *) contents[0]="\$(${stmt_l})" ;;
+        IDENTIFIER | STR) rhss[0]="\$(echo -n $(printf %q "${stmt_l}"))" ;;
+        VAR) rhss[0]="\"$stmt_l\"" ;;
+        *) rhss[0]="\$(${stmt_l})" ;;
         esac
         # If rule is STMT op STMT, deal with op and RHS
         [[ ${#rule[@]} -eq 2 ]] || {
-            contents[1]="-${rule[2]}"
+            rhss[1]="-${rule[2]}"
             local stmt_r_type="${3%%:*}"
             local stmt_r="${3#*:}"
             case $stmt_r_type in
-            IDENTIFIER | STR)
-                contents[2]="\$(echo -n $(printf %q "${stmt_r}"))"
-                ;;
-            VAR) contents[2]="\"$stmt_r\"" ;;
-            *) contents[2]="\$(${stmt_r})" ;;
+            IDENTIFIER | STR) rhss[2]="\$(echo -n $(printf %q "${stmt_r}"))" ;;
+            VAR) rhss[2]="\"$stmt_r\"" ;;
+            *) rhss[2]="\$(${stmt_r})" ;;
             esac
         }
-        printf -v result "%s" "[[ " "${contents[@]}" " ]]"
+        result="[[ ${rhss[*]} ]]"
         ;;
     BOOLS)
         case ${#rule[@]} in
