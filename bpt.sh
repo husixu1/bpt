@@ -26,8 +26,14 @@ shlr.parse() (
     local -r reduce_fn="${3:-echo}"
     if [[ -n $4 ]]; then local -r NDEBUG=false; else local -r NDEBUG=true; fi
 
+    # 99 should be enough...
+    # I assume no one's writing a BNF with 99 RHSs ...
+    local -a STATE_PTRN=('')
+    for i in {1..99}; do STATE_PTRN[i]="${STATE_PTRN[i - 1]}:*"; done
+
     # Parse stack and associatied content stack
-    local -a states=(0) contents=('')
+    # Using string manipulation for states is faster than using an array.
+    local -a states=':0' contents=('')
 
     # Look-ahead token and its content
     local token='' content=''
@@ -35,8 +41,8 @@ shlr.parse() (
     # $1: Goto state after shift
     __shift() {
         $NDEBUG ||
-            echo "[DBG] ${states[*]:${#states[@]}-1} Shift $1 \`$content\`" >&2
-        states+=("$1")
+            echo "[DBG] ${states##*:} Shift $1 \`$content\`" >&2
+        states+=":$1"
         contents+=("$content")
         token='' content=''
     }
@@ -44,14 +50,19 @@ shlr.parse() (
     # $1: Rule
     __reduce() {
         $NDEBUG ||
-            echo "[DBG] ${states[*]:${#states[@]}-1} Reduce $1" >&2
-        local -a rule=()
-        read -ra rule <<<"$1"
+            echo "[DBG] ${states##*:} Reduce $1" >&2
+
+        # shellcheck disable=SC2206
+        # Although not robust, word splitting is faster than
+        #   read -ra rule <<<"$1"
+        local -a rule=($1)
         local num_rhs=$((${#rule[@]} - 1))
 
         # Reduce and goto state
-        states=("${states[@]:0:${#states[@]}-$num_rhs}")
-        states+=("${table["${states[@]:${#states[@]}-1},${rule[0]}"]}")
+
+        # shellcheck disable=SC2295
+        states="${states%${STATE_PTRN[$num_rhs]}}"
+        states+=":${table["${states##*:},${rule[0]}"]}"
 
         # Run reduce hook, discard reduced contents, and save the reduce result
         local -n result="contents[$((${#contents[@]} - num_rhs))]"
@@ -78,7 +89,7 @@ shlr.parse() (
             IFS="$OIFS"
         }
 
-        action="${table["${states[@]:${#states[@]}-1},$token"]}"
+        action="${table["${states##*:},$token"]}"
         case "$action" in
         s*) __shift "${action#s }" ;;  # Shift
         r*) __reduce "${action#r }" ;; # Reduce
@@ -86,11 +97,11 @@ shlr.parse() (
         '')
             # TODO: Parse error and locations
             # (location xxx, expecting xxx but got xxx)
-            echo "Error in template: STATES ${states[*]} TOKEN ${token} CONTENT ${content}." >&2
+            echo "Error in template: STATES ${states} TOKEN ${token} CONTENT ${content}." >&2
             exit 1
             ;;
         *) # Parse Table Error
-            echo "Internal error: STATES ${states[*]} TOKEN ${token} CONTENT ${content}. " >&2
+            echo "Internal error: STATES ${states} TOKEN ${token} CONTENT ${content}. " >&2
             echo "Internal error: action '$action' not recognized." >&2
             exit 1
             ;;
@@ -254,50 +265,49 @@ bpt.__test_delims() {
 
 # The reduce function to collect all variables
 bpt.__reduce_collect_vars() {
-    # Note1: When using position argument ($@), index is 1-based.
-    # Note2: Avoid copy ${@:2} to an array, which is slow.
-    local -a rule=()
-    read -ra rule <<<"$1"
+    # Note: When using position argument ($@), index is 1-based.
+    # shellcheck disable=SC2206
+    local -a rule=($1)
     shift
 
     case "${rule[0]}" in
     VAR) result="$2" ;;
     STMT) case ${rule[1]} in VAR) result="$1"$'\n' ;; *) result='' ;; esac ;;
-    *) printf -v result "%s" "${@}" ;;
+    *) local OIFS="$IFS" && IFS='' && result="$*" && IFS="$OIFS" ;;
     esac
 }
 
 bpt.__reduce_collect_includes() {
-    local -a rule=()
-    read -ra rule <<<"$1"
+    # shellcheck disable=SC2206
+    local -a rule=($1)
     shift
 
     case "${rule[0]}" in
     STR) result="$1" ;;
     INCLUDE) result="$3" ;;
     STMT) case ${rule[1]} in INCLUDE) result="$1"$'\n' ;; *) result='' ;; esac ;;
-    *) printf -v result "%s" "$@" ;;
+    *) local OIFS="$IFS" && IFS='' && result="$*" && IFS="$OIFS" ;;
     esac
 }
 
 # The reduce function to collect all top-level strings, discarding all else.
 bpt.__reduce_collect_toplevel_strings() {
-    local -a rule=()
-    read -ra rule <<<"$1"
+    # shellcheck disable=SC2206
+    local -a rule=($1)
     shift
 
     case "${rule[0]}" in
     STR) result="$1" ;;
     NL) result=$'\n' ;;
     STMT) case ${rule[1]} in STR) result="$1"$'\n' ;; *) result='' ;; esac ;;
-    *) printf -v result "%s" "$@" ;;
+    *) local OIFS="$IFS" && IFS='' && result="$*" && IFS="$OIFS" ;;
     esac
 }
 
 # The reduce function to generate the template
 bpt.__reduce_generate() {
-    local -a rule=()
-    read -ra rule <<<"$1"
+    # shellcheck disable=SC2206
+    local -a rule=($1)
     shift
 
     case "${rule[0]}" in
@@ -314,7 +324,7 @@ bpt.__reduce_generate() {
         local stmt_l_type="${1%%:*}"
         local stmt_l="${1#*:}"
         case $stmt_l_type in
-        IDENTIFIER | STR) rhss[0]="\$(echo -n $(printf %q "${stmt_l}"))" ;;
+        IDENTIFIER | STR) rhss[0]="\$(echo -n ${stmt_l@Q})" ;;
         VAR) rhss[0]="\"$stmt_l\"" ;;
         *) rhss[0]="\$(${stmt_l})" ;;
         esac
@@ -324,7 +334,7 @@ bpt.__reduce_generate() {
             local stmt_r_type="${3%%:*}"
             local stmt_r="${3#*:}"
             case $stmt_r_type in
-            IDENTIFIER | STR) rhss[2]="\$(echo -n $(printf %q "${stmt_r}"))" ;;
+            IDENTIFIER | STR) rhss[2]="\$(echo -n ${stmt_r@Q})" ;;
             VAR) rhss[2]="\"$stmt_r\"" ;;
             *) rhss[2]="\$(${stmt_r})" ;;
             esac
@@ -372,9 +382,13 @@ bpt.__reduce_generate() {
         local stmt="${2#*:}"
 
         # Reduce the document
-        result="$1"
+
+        # Note 1: Since `result` is a nameref to `contents[#contents-#rhs]` and
+        #   the latter is passed in exactly as $1, the `result="$1"` command
+        #   is unnecessary here. Removing it improves performance.
+        # Note 2: Use `${stmt@Q}` is faster than `printf '%q' ${stmt}`
         case "$stmt_type" in
-        STR | IDENTIFIER) result+="{ echo -n $(printf %q "$stmt"); };" ;;
+        STR | IDENTIFIER) result+="{ echo -n ${stmt@Q}; };" ;;
         VAR) result+="{ echo -n \"$stmt\"; };" ;;
         INCLUDE) result+="$stmt" ;;
         FORIN | IF) result+="{ $stmt; };" ;;
