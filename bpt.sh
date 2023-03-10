@@ -324,7 +324,7 @@ bpt.__reduce_generate() {
         local stmt_l_type="${1%%:*}"
         local stmt_l="${1#*:}"
         case $stmt_l_type in
-        IDENTIFIER | STR) rhss[0]="\$(echo -n ${stmt_l@Q})" ;;
+        IDENTIFIER | STR) rhss[0]="\$(e ${stmt_l@Q})" ;;
         VAR) rhss[0]="\"$stmt_l\"" ;;
         *) rhss[0]="\$(${stmt_l})" ;;
         esac
@@ -334,7 +334,7 @@ bpt.__reduce_generate() {
             local stmt_r_type="${3%%:*}"
             local stmt_r="${3#*:}"
             case $stmt_r_type in
-            IDENTIFIER | STR) rhss[2]="\$(echo -n ${stmt_r@Q})" ;;
+            IDENTIFIER | STR) rhss[2]="\$(e ${stmt_r@Q})" ;;
             VAR) rhss[2]="\"$stmt_r\"" ;;
             *) rhss[2]="\$(${stmt_r})" ;;
             esac
@@ -388,8 +388,8 @@ bpt.__reduce_generate() {
         #   is unnecessary here. Removing it improves performance.
         # Note 2: Use `${stmt@Q}` is faster than `printf '%q' ${stmt}`
         case "$stmt_type" in
-        STR | IDENTIFIER) result+="{ echo -n ${stmt@Q}; };" ;;
-        VAR) result+="{ echo -n \"$stmt\"; };" ;;
+        STR | IDENTIFIER) result+="{ e ${stmt@Q}; };" ;;
+        VAR) result+="{ e \"$stmt\"; };" ;;
         INCLUDE) result+="$stmt" ;;
         FORIN | IF) result+="{ $stmt; };" ;;
         esac
@@ -449,6 +449,7 @@ bpt.process() (
 
     # Prase with the provided reduce function
     shlr.parse PARSE_TABLE scanner "$reduce_fn" "$debug"
+
 )
 
 bpt.print_help() {
@@ -501,19 +502,21 @@ bpt.main() {
         shift
     done
 
+    # Append this if reducer is bpt.__reduce_generate
+    local HEADER=''
+    [[ $reduce_fn != bpt.__reduce_generate ]] || {
+        read -r -d '' HEADER <<-'EOF'
+			#!/bin/bash
+			e(){ echo -n "$@"; };
+		EOF
+    }
+
     if $scan; then
         bpt.scan "$ld" "$rd" <"$input_file"
     else
         # Process templates
         result="$(bpt.process "$ld" "$rd" "$reduce_fn" "$debug" <"$input_file")"
-        var=apple
-        var1=10
-        var2=20
-        var3=durian
-        var4=eggplant
-        var100=100
-        list1="1 2 3"
-        $post_process "$result"
+        $post_process "$HEADER$result"
     fi
 }
 
