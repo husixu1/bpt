@@ -409,32 +409,46 @@ bpt.__reduce_generate() {
 # Input: Template from stdin
 #
 # Grammar:
-#   DOCUMENT   -> DOCUMENT STMT
-#               | .
-#   STMT       -> IF | FORIN | INCLUDE | VAR | IDENTIFIER | STR .
-#   IF         -> ld if BOOLS cl DOCUMENT ELIF ELSE rd .
-#   ELIF       -> ELIF elif BOOLS cl DOCUMENT
-#               | .
-#   ELSE       -> else cl DOCUMENT
-#               | .
-#   BOOLS      -> BOOLS and BOOL
-#               | BOOLS or BOOL
-#               | BOOL .
-#   BOOL       -> STMT eq STMT
-#               | STMT ne STMT
-#               | STMT gt STMT
-#               | STMT lt STMT
-#               | STMT ge STMT
-#               | STMT le STMT
-#               | STMT .
-#   FORIN      -> ld for IDENTIFIER in DOCUMENT cl DOCUMENT rd .
-#   INCLUDE    -> ld include STR rd .
-#   VAR        -> ld IDENTIFIER rd .
-#   IDENTIFIER -> id .
-#   STR        -> str | NL .
-#   NL         -> nl .
+#   DOC     -> DOC STMT
+#            | .
+#   STMT    -> IF | FORIN | INCLUDE | BUILTIN | VAR | STR .
+#   IF      -> ld if BOOLO cl DOC ELIF ELSE rd .
+#   ELIF    -> ELIF elif BOOLO cl DOC
+#            | .
+#   ELSE    -> else cl DOC
+#            | .
+#   BOOLO   -> BOOLO or BOOLA
+#            | BOOLA .
+#   BOOLA   -> BOOLA and BOOL
+#            | BOOLA and lp BOOLO rp
+#            | lp BOOLO rp
+#            | BOOL .
+#   BOOL    -> STMT BOP STMT
+#            | STMT
+#            | UOP BOOL .
+#   FORIN   -> ld for ID in ARGS cl DOC rd .
+#   INCLUDE -> ld include cl STR rd .
+#   BUILTIN -> ld ID cl ARGS rd .
+#   ARGS    -> ARGS STMT
+#            | .
+#   VAR     -> ld ID rd
+#            | ld ID or VAR rd
+#            | ld ID or STR rd
+#            | ld ID and VAR rd
+#            | ld ID and STR rd .
+#   BOP     -> ne | eq | gt | lt | ge | le | strgt | strlt | streq | strne .
+#   UOP     -> ex .
+#   ID      -> id .
+#   STR     -> str | NL .
+#   NL      -> nl .
 #
-# Note: the `IDENTIFIER -> id`, `STR -> str | NL`, and `NL -> nl` rules are not
+# Note1: the combination of BOOLO and BOOLA is equivalent to the expression
+#   grammar `BOOLS -> BOOL or BOOL | BOOL and BOOL | lp BOOL rp | BOOL .`
+#   with left associativity for `and` and `or` meanwhile `and` having higher
+#   precidence than `or`. (Solves shift-reduce conflict with subclassing).
+# See: https://ece.uwaterloo.ca/~vganesh/TEACHING/W2014/lectures/lecture08.pdf
+#
+# Note2: the `IDENTIFIER -> id`, `STR -> str | NL`, and `NL -> nl` rules are not
 #   redundant. They are for better controls when hooking the reduce function.
 bpt.process() (
     local -r ld="$1" rd="$2" debug="$4"
