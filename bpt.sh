@@ -13,15 +13,21 @@ readonly __DEFINED_BPT_SH=1
 #   The parse table should be an associative array where the key is
 #   <state>,<token> and the value actions (s <k>/r <rule>/a/<k>).
 # $2: Reduce function hook
-#   Args that passed to this function:
+#   Args passed to this function:
 #     $1: The reduce rule (as a string). i.e. "LHS RHS1 RHS2 ..."
 #     ${@:1}: RHS contents.
 #   The reduce function should store the reduce result to the `result` variable.
-# $3: (optional) If set, enable debug.
+# $3: Error handler function hook
+#   Args passed to this function:
+#     $1: Line
+#     $2: Column
+#     $3: Default error message
+# $4: (optional) If set, enable debug.
 shlr.parse() (
     local -rn table="$1"
     local -r reduce_fn="${2:-echo}"
-    if [[ -n $3 ]]; then local -r NDEBUG=false; else local -r NDEBUG=true; fi
+    local -r error_fn="${3:-__error}"
+    if [[ -n $4 ]]; then local -r NDEBUG=false; else local -r NDEBUG=true; fi
 
     # 99 should be enough...
     # I assume no one's writing a BNF with 99 RHSs ...
@@ -31,9 +37,10 @@ shlr.parse() (
     # Parse stack and associatied content stack
     # Using string manipulation for states is faster than using an array.
     local -a states=':0' contents=('')
-
     # Look-ahead token and its content
     local token='' content=''
+    # Location tracking variables
+    local num_lines=0 num_bytes=0
 
     # $1: Goto state after shift
     __shift() {
@@ -78,10 +85,16 @@ shlr.parse() (
         printf '%s' "${contents[@]}"
     }
 
+    # Default error handler
+    __error() {
+        echo "Error: Line $(($1 + 1)) Column $(($2 + 1))"
+        echo "$3"
+    } >&2
+
     while true; do
         [[ -n $token ]] || {
+            read -r token num_lines num_bytes
             local OIFS="$IFS" && IFS=''
-            read -r token
             read -r content
             IFS="$OIFS"
         }
@@ -92,9 +105,16 @@ shlr.parse() (
         r*) __reduce "${action#r }" ;; # Reduce
         a) __accept && break ;;        # Accept
         '')
-            # TODO: Parse error and locations
-            # (location xxx, expecting xxx but got xxx)
-            echo "Error in template: STATES ${states} TOKEN ${token} CONTENT ${content}." >&2
+            local expects='' rule_key=''
+            for rule_key in "${!table[@]}"; do
+                [[ $rule_key != "${states##*:},"* ||
+                    -z "${table["$rule_key"]}" ||
+                    "${table["$rule_key"]}" =~ ^[[:digit:]]+$ ]] ||
+                    expects+="${expects:+,}${BPT_PP_TOKEN_TABLE["${rule_key##*,}"]:-${rule_key##*,}}"
+            done
+            $error_fn "$num_lines" "$num_bytes" \
+                "Expects one of \`${expects[*]}\` but got \`${token}\` ($content)."
+            $NDEBUG || echo "[DBG] PARSER STATES ${states} TOKEN ${token} CONTENT ${content}." >&2
             exit 1
             ;;
         *) # Parse Table Error
@@ -144,14 +164,14 @@ bpt.scan() {
     local quote=''
 
     # Location trackers
-    local num_lines=1
+    local num_lines=0
     local num_bytes=0
 
     # Tokenizer
     local line='' content=''
     while read -r line; do
         # Only count newlines outside `ld ... rd` and inside quotes.
-        if [[ $num_lines -gt 1 && ($num_ld -eq 0 || -n $quote) ]]; then
+        if [[ $num_lines -gt 0 && ($num_ld -eq 0 || -n $quote) ]]; then
             echo nl
             echo ''
         fi
@@ -162,14 +182,15 @@ bpt.scan() {
                 if [[ $line =~ ^(${e_ld}) ]]; then
                     ((++num_ld))
                     content="${BASH_REMATCH[1]}"
-                    echo ld
+                    echo -n ld
                 elif [[ $line =~ (${e_ld}) ]]; then
                     content="${line%%"${BASH_REMATCH[1]}"*}"
-                    echo str
+                    echo -n str
                 else
                     content="$line"
-                    echo str
+                    echo -n str
                 fi
+                echo " $num_lines $num_bytes"
                 echo "$content"
             elif [[ -n $quote ]]; then
                 # Inside quotes in `ld ... rd`
@@ -188,31 +209,24 @@ bpt.scan() {
                     content="$line"
                 fi
                 [[ -z "$string" ]] || {
-                    echo str
+                    echo "str $num_lines $num_bytes"
                     echo "$string"
                 }
             elif [[ $line =~ ^(${KW_RE}) ]]; then
                 # Inside `ld ... rd` and matches a keyword at front
                 content="${BASH_REMATCH[1]}"
                 case "$content" in
-                '-eq') echo eq ;;
-                '-ne') echo ne ;;
-                '-lt') echo lt ;;
-                '-gt') echo gt ;;
-                '-le') echo le ;;
-                '-ge') echo ge ;;
-                '==') echo streq ;;
-                '!=') echo strne ;;
-                '>') echo strgt ;;
-                '<') echo strlt ;;
-                '!') echo ex ;;
-                ':') echo cl ;;
-                '(') echo lp ;;
-                ')') echo rp ;;
+                '-eq') echo -n eq ;; '-ne') echo -n ne ;;
+                '-lt') echo -n lt ;; '-gt') echo -n gt ;;
+                '-le') echo -n le ;; '-ge') echo -n ge ;;
+                '==') echo -n streq ;; '!=') echo -n strne ;;
+                '>') echo -n strgt ;; '<') echo -n strlt ;;
+                '!') echo -n ex ;; ':') echo -n cl ;;
+                '(') echo -n lp ;; ')') echo -n rp ;;
                 '"' | "'") quote="$content" ;;
                 "$ld")
                     ((++num_ld))
-                    echo ld
+                    echo -n ld
                     ;;
                 "$rd")
                     [[ -n $num_ld ]] || {
@@ -220,20 +234,24 @@ bpt.scan() {
                         return 1
                     }
                     ((--num_ld))
-                    echo rd
+                    echo -n rd
                     ;;
                 and | or | if | elif | else) ;&
-                for | in | include) echo "$content" ;;
+                for | in | include) echo -n "$content" ;;
                 *)
                     echo "Internal error: Unrecognized token ${content}" >&2
                     return 1
                     ;;
                 esac
-                [[ -n $quote ]] || echo "$content"
+                [[ -n $quote ]] || {
+                    echo " $num_lines $num_bytes"
+                    echo "$content"
+                }
             else # Inside `ld ... rd` but outside quotes
                 # Ignore spaces inside `ld ... rd`
-                [[ $line =~ ^[[:space:]]+(.*) ]] && {
-                    line="${BASH_REMATCH[1]}"
+                [[ $line =~ ^([[:space:]]+)(.*) ]] && {
+                    line="${BASH_REMATCH[2]}"
+                    ((num_bytes += ${#BASH_REMATCH[1]}))
                     continue
                 }
                 content="$line"
@@ -247,15 +265,17 @@ bpt.scan() {
                     return 1
                 fi
                 content="${BASH_REMATCH[1]}"
-                echo id
+                echo "id $num_lines $num_bytes"
                 echo "$content"
             fi
             line="${line#"$content"}"
+            ((num_bytes += ${#content}))
         done
         ((++num_lines))
+        ((num_bytes = 0))
     done
-    echo $  # The EOF token
-    echo '' # The EOF content (empty)
+    echo "$ $num_lines 0" # The EOF token
+    echo ''               # The EOF content (empty)
 }
 
 bpt.__test_delims() {
@@ -550,10 +570,21 @@ bpt.process() (
         done
         bpt.process "$ld" "$rd" "$reduce_fn" "$1" "$debug"
     }
-    export -f __recursive_process
+
+    # Pretty-print parse errors
+    __error_handler() {
+        echo "Error: File '$file' Line $(($1 + 1)) Column $(($2 + 1))"
+        echo "$3"
+        echo
+        # Pretty-print the error location
+        local -a line=()
+        mapfile -t -s "$1" -n 1 line <"$file"
+        echo "${line[0]}"
+        printf "%$2s^--- \033[1mHERE\033[0m\n"
+    } >&2
 
     # Prase with the provided reduce function
-    shlr.parse PARSE_TABLE "$reduce_fn" "$debug" < <(bpt.scan "$ld" "$rd" <"$file")
+    shlr.parse PARSE_TABLE "$reduce_fn" __error_handler "$debug" < <(bpt.scan "$ld" "$rd" <"$file")
 )
 
 bpt.print_help() {
@@ -605,6 +636,13 @@ bpt.main() {
         esac
         shift
     done
+
+    # Global constants for pretty-printing
+    local -rA BPT_PP_TOKEN_TABLE=(
+        [ld]="$ld" [rd]="$rd"
+        [eq]='-eq' [ne]='-ne' [gt]='-gt' [lt]='-lt' [ge]='-ge' [le]='-le'
+        [streq]='==' [strne]='!=' [strgt]='>' [strlt]='<'
+        [cl]=':' [ex]='!' [lp]='(' [rp]=')' [nl]='\n')
 
     # Deduplication function for collect-{var,include}
     bpt.__dedup() { echo "$1" | sort | uniq; }
