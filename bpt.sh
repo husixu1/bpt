@@ -113,7 +113,7 @@ shlr.parse() (
 # $1: Left deilmiter
 # $2: Right delimiter
 #
-# Token name to content mappings:
+# Terminal token name to content mappings:
 #   str: Anything outside the toplevel `ld ... rd` or
 #        Anything inside `"..."` or `'...'` within any `ld ... rd`
 #     Note1: `"` inside `"..."` needs to be escaped using `\"`,
@@ -121,22 +121,11 @@ shlr.parse() (
 #     Note2: str cannot contain newline since both the input and the output
 #            of the scanner is line-based. Newline is expressed by the nl token.
 #   nl: \n
-#   ld: ${ldelim}
-#   rd: ${rdelim}
-#   lp: (
-#   rp: )
-#   cl: :
-#   ex: !
-#   eq: -eq
-#   ne: !=
-#   lt: -lt
-#   gt: -gt
-#   le: -le
-#   ge: -ge
-#   streq: ==
-#   strne: !=
-#   strlt: <
-#   strgt: >
+#   ld: ${ldelim}   rd: ${rdelim}       lp: (           rp: )
+#   cl: :           ex: !               eq: -eq         ne: -ne
+#   lt: -lt         gt: -gt             le: -le         ge: -ge
+#   streq: ==       strne: !=           strlt: <        strgt: >
+#   and|or|if|elif|else|for|in|include: <as is>
 #   id: [[:alpha:]_][[:alnum:]_]*
 bpt.scan() {
     local -r ld="$1" rd="$2"
@@ -351,7 +340,7 @@ bpt.__reduce_collect_toplevel_strings() {
     case "${rule[0]}" in
     STR) result="$1" ;;
     NL) result=$'\n' ;;
-    STMT) case ${rule[1]} in STR) result="$1"$'\n' ;; *) result='' ;; esac ;;
+    STMT) case "${rule[1]}" in STR) result="$1"$'\n' ;; *) result='' ;; esac ;;
     *) local OIFS="$IFS" && IFS='' && result="$*" && IFS="$OIFS" ;;
     esac
 }
@@ -370,12 +359,10 @@ bpt.__reduce_generate() {
         rd) result="\${$2}" ;;
         or) result="\${$2:-" ;;&
         and) result="\${$2:+" ;;&
-        *)
-            case "${rule[4]}" in
+        *) case "${rule[4]}" in
             VAR) result+="\"$4\"}" ;;
             STR) result+="${4@Q}}" ;;
-            esac
-            ;;
+            esac ;;
         esac
         ;;
     ARGS)
@@ -401,14 +388,14 @@ bpt.__reduce_generate() {
         # filter allowed builtints
         case "$2" in
         toupper | tolower | len | seq | quote) ;;
-        *) echo "Unrecognized builtin function $2">&2; exit 1;;
+        *) echo "Unrecognized builtin function $2" >&2 && exit 1 ;;
         esac
         result="\$($2 $4)"
         ;;
     INCLUDE) result="$(__recursive_process "$4")" ;;
     FORIN) result="for $3 in $5; do $7 done" ;;
     BOOL)
-        case ${#rule[@]} in
+        case "${#rule[@]}" in
         3) result="$*" ;; # UOP BOOL
         *)
             # Don't use the name contents (avoid nameref collision)
@@ -416,7 +403,7 @@ bpt.__reduce_generate() {
             # Strip the tag from STMT
             local stmt_l_type="${1%%:*}"
             local stmt_l="${1#*:}"
-            case $stmt_l_type in
+            case "$stmt_l_type" in
             ID | STR) rhss[0]="\$(e ${stmt_l@Q})" ;;
             VAR) rhss[0]="\"$stmt_l\"" ;;
             *) rhss[0]="\$(${stmt_l})" ;;
@@ -426,7 +413,7 @@ bpt.__reduce_generate() {
                 rhss[1]="$2"
                 local stmt_r_type="${3%%:*}"
                 local stmt_r="${3#*:}"
-                case $stmt_r_type in
+                case "$stmt_r_type" in
                 ID | STR) rhss[2]="\$(e ${stmt_r@Q})" ;;
                 VAR) rhss[2]="\"$stmt_r\"" ;;
                 *) rhss[2]="\$(${stmt_r})" ;;
@@ -438,24 +425,22 @@ bpt.__reduce_generate() {
         ;;
     BOOLA) # For BOOLA->BOOL (case 2), result is already $1, thus no-op.
         case "${#rule[@]}" in
-        4)
-            case "${rule[1]}" in
+        4) case "${rule[1]}" in
             BOOLA) result="$1 && $3" ;;
             lp) result="( $2 )" ;;
-            esac
-            ;;
+            esac ;;
         6) result="$1 && ( $4 )" ;;
         esac
         ;;
     BOOLO) [[ ${#rule[@]} -eq 2 ]] || result="$1 || $3" ;;
     ELSE)
-        case ${#rule[@]} in
+        case "${#rule[@]}" in
         1) result='' ;;
         *) result="else $3" ;;
         esac
         ;;
     ELIF)
-        case ${#rule[@]} in
+        case "${#rule[@]}" in
         1) result='' ;;
         *) result="$1; elif [[ $3 ]]; then $5" ;;
         esac
