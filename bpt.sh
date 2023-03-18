@@ -66,7 +66,7 @@ shlr.parse() (
 
         # Run reduce hook, discard reduced contents, and save the reduce result
         local -n result="contents[$((${#contents[@]} - num_rhs))]"
-        $reduce_fn "$1" "${contents[@]:${#contents[@]}-$num_rhs}"
+        $reduce_fn "$1" "${contents[@]:${#contents[@]}-$num_rhs}" || exit 1
 
         # The following is faster than:
         #   contents=("${contents[@]:0:${#contents[@]}-$num_rhs}")
