@@ -570,11 +570,11 @@ bpt.main() {
             ;;
         -cv | --collect-vars)
             reduce_fn=bpt.__reduce_collect_vars
-            post_process='echo'
+            post_process=bpt.__dedup
             ;;
         -ci | --collect-includes)
             reduce_fn=bpt.__reduce_collect_includes
-            post_process='echo'
+            post_process=bpt.__dedup
             ;;
         -cs | --collect-strings)
             reduce_fn=bpt.__reduce_collect_toplevel_strings
@@ -595,6 +595,9 @@ bpt.main() {
         esac
         shift
     done
+
+    # Deduplication function for collect-{var,include}
+    bpt.__dedup() { echo "$1" | sort | uniq; }
 
     # Append this if reducer is bpt.__reduce_generate
     local HEADER=''
