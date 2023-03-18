@@ -29,7 +29,7 @@ shlr.parse() (
     local -r error_fn="${3:-__error}"
     if [[ -n $4 ]]; then local -r NDEBUG=false; else local -r NDEBUG=true; fi
 
-    # 99 should be enough...
+    # 99 should be enough ...
     # I assume no one's writing a BNF with 99 RHSs ...
     local -a STATE_PTRN=('')
     for i in {1..99}; do STATE_PTRN[i]="${STATE_PTRN[i - 1]}:*"; done
@@ -63,7 +63,6 @@ shlr.parse() (
         local num_rhs=$((${#rule[@]} - 1))
 
         # Reduce and goto state
-
         # shellcheck disable=SC2295
         states="${states%${STATE_PTRN[$num_rhs]}}"
         states+=":${table["${states##*:},${rule[0]}"]}"
@@ -374,11 +373,11 @@ bpt.__reduce_generate() {
     VAR)
         case "${rule[3]}" in
         rd) result="\${$2}" ;;
-        or) result="\${$2:-" ;;&
-        and) result="\${$2:+" ;;&
+        or) result="\${$2:-\$(e " ;;&
+        and) result="\${$2:+\$(e " ;;&
         *) case "${rule[4]}" in
-            VAR) result+="\"$4\"}" ;;
-            STR) result+="${4@Q}}" ;;
+            VAR) result+="\"$4\")}" ;;
+            STR) result+="${4@Q})}" ;;
             esac ;;
         esac
         ;;
@@ -404,10 +403,10 @@ bpt.__reduce_generate() {
     BUILTIN)
         # filter allowed builtints
         case "$2" in
-        toupper | tolower | len | seq | quote) ;;
+        len | seq) result="\$($2 $4)" ;;
+        quote) result="\"$4\"" ;;
         *) echo "Unrecognized builtin function $2" >&2 && exit 1 ;;
         esac
-        result="\$($2 $4)"
         ;;
     INCLUDE) result="$(__recursive_process "$4")" ;;
     FORIN) result="for $3 in $5; do $7 done" ;;
@@ -482,7 +481,7 @@ bpt.__reduce_generate() {
         # Reduce the document
         case "$stmt_type" in
         STR) result+="{ e ${stmt@Q}; };" ;;
-        VAR) result+="{ e \"$stmt\"; };" ;;
+        BUILTIN | VAR) result+="{ e \"$stmt\"; };" ;;
         INCLUDE) result+="$stmt" ;;
         FORIN | IF) result+="{ $stmt; };" ;;
         esac
@@ -653,6 +652,7 @@ bpt.main() {
         read -r -d '' HEADER <<-'EOF'
 			#!/bin/bash
 			e(){ echo -n "$@"; };
+			len(){ echo -n "${#1}"; };
 		EOF
     }
 
