@@ -374,7 +374,7 @@ bpt.__reduce_generate() {
         esac
         result="\$($2 $4)"
         ;;
-    INCLUDE) result="$(__recursive_process <"$4")" ;;
+    INCLUDE) result="$(__recursive_process "$4")" ;;
     FORIN) result="for $3 in $5; do $7 done" ;;
     BOOL)
         case ${#rule[@]} in
@@ -464,7 +464,8 @@ bpt.__reduce_generate() {
 # $2: Right delimiter
 # $3: The reduce function hook to pass to the parser.
 #     Defaults to bpt.__reduce_collect_vars
-# $4: (optional) If set, enable debug.
+# $4: File to process
+# $5: (optional) If set, enable debug.
 #
 # Input: Template from stdin
 #
@@ -511,19 +512,38 @@ bpt.__reduce_generate() {
 # Note2: the `ID -> id`, `STR -> str | NL`, and `NL -> nl` rules are not
 #   redundant. They are for better controls when hooking the reduce function.
 bpt.process() (
-    local -r ld="$1" rd="$2" debug="$4"
+    local -r ld="$1" rd="$2" file="$4" debug="$5"
     local -r reduce_fn="${3:-bpt.__reduce_generate}"
+    local -a file_stack=("${file_stack[@]}")
+
+    [[ -f $file ]] || {
+        echo "Error: file '$file' does not exist"
+        return 1
+    }
+    file_stack+=("$file")
 
     # Curry this function so that it can be called by the reducer recursively
-    __recursive_process() { bpt.process "$ld" "$rd" "$reduce_fn" "$debug"; }
+    __recursive_process() {
+        local file
+        # Detect recursive includes
+        for file in "${file_stack[@]}"; do
+            [[ $file -ef $1 ]] && {
+                printf "Error: recursive include detected:\n"
+                printf '  In: %s\n' "${file_stack[0]}"
+                printf '  --> %s\n' "${file_stack[@]:1}"
+                printf '  --> %s\n' "${file}"
+                return 1
+            } >&2
+        done
+        bpt.process "$ld" "$rd" "$reduce_fn" "$1" "$debug"
+    }
     export -f __recursive_process
 
     # Curry the scanner so that it can be passed to the parser
-    scanner() { bpt.scan "$ld" "$rd"; }
+    scanner() { bpt.scan "$ld" "$rd" <"$file"; }
 
     # Prase with the provided reduce function
     shlr.parse PARSE_TABLE scanner "$reduce_fn" "$debug"
-
 )
 
 bpt.print_help() {
@@ -532,7 +552,7 @@ bpt.print_help() {
 
 bpt.main() {
     local ld='{{' rd='}}'
-    local input_file=''
+    local infile=''
     local reduce_fn=bpt.__reduce_generate
     local post_process=eval
     local scan=false
@@ -566,11 +586,11 @@ bpt.main() {
             ;;
         -d | --debug) debug=1 ;;
         *)
-            [[ -z $input_file ]] || {
+            [[ -z $infile ]] || {
                 bpt.print_help
                 return 1
             }
-            input_file="$1"
+            infile="$1"
             ;;
         esac
         shift
@@ -586,11 +606,11 @@ bpt.main() {
     }
 
     if $scan; then
-        bpt.scan "$ld" "$rd" <"$input_file"
+        bpt.scan "$ld" "$rd" <"$infile"
     else
         # Process templates
-        result="$(bpt.process "$ld" "$rd" "$reduce_fn" "$debug" <"$input_file")"
-        $post_process "$HEADER$result"
+        result="$(bpt.process "$ld" "$rd" "$reduce_fn" "$infile" "$debug")" &&
+            $post_process "$HEADER$result"
     fi
 }
 
