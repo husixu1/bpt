@@ -291,9 +291,40 @@ bpt.__reduce_collect_vars() {
     shift
 
     case "${rule[0]}" in
-    VAR) result="$2" ;;
-    STMT) case ${rule[1]} in VAR) result="$1"$'\n' ;; *) result='' ;; esac ;;
-    FORIN) ;; # TODO
+    NL | UOP | BOP) result='' ;;
+    VAR)
+        result="$2"$'\n'
+        [[ ${#rule[@]} -eq 4 || ${rule[4]} != VAR ]] || result+="$4"
+        ;;
+    BUILTIN) result="$4" ;;
+    INCLUDE) result="$(__recursive_process "$4")"$'\n' ;;
+    FORIN)
+        result=''
+        local var
+        while read -r var; do
+            [[ -z $var || $var == "$3" ]] || result+="$var"$'\n'
+        done <<<"$7"
+        ;;
+    BOOL)
+        case "${#rule[@]}" in
+        3) result="$2" ;;
+        4) result="$1$3" ;;
+        esac
+        ;;
+    BOOLA)
+        case "${#rule[@]}" in
+        4) case "${rule[1]}" in
+            lp) result="$2" ;;
+            BOOLA) result="$1$3" ;;
+            esac ;;
+        6) result="$1$4" ;;
+        esac
+        ;;
+    BOOLO) [[ "${#rule}" -eq 2 ]] || result+="$3" ;;
+    ELSE) result="$3" ;;
+    ELIF) result="$3$5" ;;
+    IF) result="$3$5$6$7" ;;
+    STMT) case "${rule[1]}" in STR) result='' ;; *) result="$1" ;; esac ;;
     *) local OIFS="$IFS" && IFS='' && result="$*" && IFS="$OIFS" ;;
     esac
 }
@@ -305,8 +336,8 @@ bpt.__reduce_collect_includes() {
 
     case "${rule[0]}" in
     STR) result="$1" ;;
-    INCLUDE) result="$4" ;;
-    STMT) case ${rule[1]} in INCLUDE) result="$1"$'\n' ;; *) result='' ;; esac ;;
+    INCLUDE) result="$4"$'\n' && result+="$(__recursive_process "$4")" ;;
+    STMT) case "${rule[1]}" in INCLUDE) result="$1" ;; *) result='' ;; esac ;;
     *) local OIFS="$IFS" && IFS='' && result="$*" && IFS="$OIFS" ;;
     esac
 }
