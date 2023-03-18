@@ -123,13 +123,20 @@ shlr.parse() (
 #   nl: \n
 #   ld: ${ldelim}
 #   rd: ${rdelim}
+#   lp: (
+#   rp: )
 #   cl: :
-#   eq: ==
+#   ex: !
+#   eq: -eq
 #   ne: !=
-#   lt: <
-#   gt: >
-#   lt: <=
-#   gt: >=
+#   lt: -lt
+#   gt: -gt
+#   le: -le
+#   ge: -ge
+#   streq: ==
+#   strne: !=
+#   strlt: <
+#   strgt: >
 #   id: [[:alpha:]_][[:alnum:]_]*
 bpt.scan() {
     local -r ld="$1" rd="$2"
@@ -137,7 +144,13 @@ bpt.scan() {
     bpt.__test_delims "$ld" "$rd" || return 1
 
     # Keywords
-    local -r KW_RE="${e_ld}|${e_rd}|==|!=|>|<|>=|<=|:|\"|\'|and|or|if|elif|else|for|in|include"
+    local -ra KW=(
+        "${e_ld}" "${e_rd}"
+        '-eq' '-ne' '-gt' '-lt' '-ge' '-le'
+        '==' '!=' '>' '<' ':' '\!' '\"' "\\'" '\(' '\)'
+        'and' 'or' 'if' 'elif' 'else' 'for' 'in' 'include'
+    )
+    local -r KW_RE="$(IFS='|' && echo -n "${KW[*]}")"
     local -r ID_RE='[[:alpha:]_][[:alnum:]_]*'
 
     # Scanner states
@@ -196,13 +209,20 @@ bpt.scan() {
                 # Inside `ld ... rd` and matches a keyword at front
                 content="${BASH_REMATCH[1]}"
                 case "$content" in
-                '==') echo eq ;;
-                '!=') echo ne ;;
-                '<') echo lt ;;
-                '>') echo gt ;;
-                '<=') echo le ;;
-                '>=') echo ge ;;
+                '-eq') echo eq ;;
+                '-ne') echo ne ;;
+                '-lt') echo lt ;;
+                '-gt') echo gt ;;
+                '-le') echo le ;;
+                '-ge') echo ge ;;
+                '==') echo streq ;;
+                '!=') echo strne ;;
+                '>') echo strgt ;;
+                '<') echo strlt ;;
+                '!') echo ex ;;
                 ':') echo cl ;;
+                '(') echo lp ;;
+                ')') echo rp ;;
                 '"' | "'") quote="$content" ;;
                 "$ld")
                     ((++num_ld))
@@ -273,6 +293,7 @@ bpt.__reduce_collect_vars() {
     case "${rule[0]}" in
     VAR) result="$2" ;;
     STMT) case ${rule[1]} in VAR) result="$1"$'\n' ;; *) result='' ;; esac ;;
+    FORIN) ;; # TODO
     *) local OIFS="$IFS" && IFS='' && result="$*" && IFS="$OIFS" ;;
     esac
 }
@@ -284,7 +305,7 @@ bpt.__reduce_collect_includes() {
 
     case "${rule[0]}" in
     STR) result="$1" ;;
-    INCLUDE) result="$3" ;;
+    INCLUDE) result="$4" ;;
     STMT) case ${rule[1]} in INCLUDE) result="$1"$'\n' ;; *) result='' ;; esac ;;
     *) local OIFS="$IFS" && IFS='' && result="$*" && IFS="$OIFS" ;;
     esac
@@ -312,46 +333,90 @@ bpt.__reduce_generate() {
 
     case "${rule[0]}" in
     NL) result=$'\n' ;;
-    STR) result="$1" ;;
-    IDENTIFIER) result="$1" ;;
-    VAR) result="\${$2}" ;;
-    INCLUDE) result="$(__recursive_process <"$3")" ;;
-    FORIN) result="for $3 in \$($5); do $7 done" ;;
-    BOOL)
-        # Don't use the name contents (avoid nameref collision)
-        local -a rhss=()
-        # Strip the tag from STMT
-        local stmt_l_type="${1%%:*}"
-        local stmt_l="${1#*:}"
-        case $stmt_l_type in
-        IDENTIFIER | STR) rhss[0]="\$(e ${stmt_l@Q})" ;;
-        VAR) rhss[0]="\"$stmt_l\"" ;;
-        *) rhss[0]="\$(${stmt_l})" ;;
-        esac
-        # If rule is STMT op STMT, deal with op and RHS
-        [[ ${#rule[@]} -eq 2 ]] || {
-            rhss[1]="-${rule[2]}"
-            local stmt_r_type="${3%%:*}"
-            local stmt_r="${3#*:}"
-            case $stmt_r_type in
-            IDENTIFIER | STR) rhss[2]="\$(e ${stmt_r@Q})" ;;
-            VAR) rhss[2]="\"$stmt_r\"" ;;
-            *) rhss[2]="\$(${stmt_r})" ;;
-            esac
-        }
-        result="[[ ${rhss[*]} ]]"
-        ;;
-    BOOLS)
-        case ${#rule[@]} in
-        2) result="$1" ;;
+    STR | ID | UOP | BOP) result="$1" ;;
+    VAR)
+        case "${rule[3]}" in
+        rd) result="\${$2}" ;;
+        or) result="\${$2:-" ;;&
+        and) result="\${$2:+" ;;&
         *)
-            case "${rule[2]}" in
-            and) result="$1 && $3" ;;
-            or) result="$1 || $3" ;;
+            case "${rule[4]}" in
+            VAR) result+="\"$4\"}" ;;
+            STR) result+="${4@Q}}" ;;
             esac
             ;;
         esac
         ;;
+    ARGS)
+        [[ ${#rule[@]} -ne 1 ]] || {
+            result=''
+            return
+        }
+        # Strip the tag from STMT
+        local stmt_type="${2%%:*}"
+        local stmt="${2#*:}"
+
+        # Note 1: Since `result` is a nameref to `contents[#contents-#rhs]` and
+        #   the latter is passed in exactly as $1, the `result="$1"` command
+        #   is unnecessary here. Removing it improves performance.
+        # Note 2: Use `${stmt@Q}` is faster than `printf '%q' ${stmt}`
+        case "$stmt_type" in
+        STR) result+=" ${stmt@Q} " ;;
+        VAR | BUILTIN) result+=" $stmt " ;;
+        INCLUDE | FORIN | IF) result+=" \"\$($stmt)\" " ;;
+        esac
+        ;;
+    BUILTIN)
+        # filter allowed builtints
+        case "$2" in
+        toupper | tolower | len | seq | quote) ;;
+        *) echo "Unrecognized builtin function $2">&2; exit 1;;
+        esac
+        result="\$($2 $4)"
+        ;;
+    INCLUDE) result="$(__recursive_process <"$4")" ;;
+    FORIN) result="for $3 in $5; do $7 done" ;;
+    BOOL)
+        case ${#rule[@]} in
+        3) result="$*" ;; # UOP BOOL
+        *)
+            # Don't use the name contents (avoid nameref collision)
+            local -a rhss=()
+            # Strip the tag from STMT
+            local stmt_l_type="${1%%:*}"
+            local stmt_l="${1#*:}"
+            case $stmt_l_type in
+            ID | STR) rhss[0]="\$(e ${stmt_l@Q})" ;;
+            VAR) rhss[0]="\"$stmt_l\"" ;;
+            *) rhss[0]="\$(${stmt_l})" ;;
+            esac
+            # If rule is STMT op STMT, deal with op and RHS
+            [[ ${#rule[@]} -eq 2 ]] || {
+                rhss[1]="$2"
+                local stmt_r_type="${3%%:*}"
+                local stmt_r="${3#*:}"
+                case $stmt_r_type in
+                ID | STR) rhss[2]="\$(e ${stmt_r@Q})" ;;
+                VAR) rhss[2]="\"$stmt_r\"" ;;
+                *) rhss[2]="\$(${stmt_r})" ;;
+                esac
+            }
+            result="${rhss[*]}"
+            ;;
+        esac
+        ;;
+    BOOLA) # For BOOLA->BOOL (case 2), result is already $1, thus no-op.
+        case "${#rule[@]}" in
+        4)
+            case "${rule[1]}" in
+            BOOLA) result="$1 && $3" ;;
+            lp) result="( $2 )" ;;
+            esac
+            ;;
+        6) result="$1 && ( $4 )" ;;
+        esac
+        ;;
+    BOOLO) [[ ${#rule[@]} -eq 2 ]] || result="$1 || $3" ;;
     ELSE)
         case ${#rule[@]} in
         1) result='' ;;
@@ -361,16 +426,16 @@ bpt.__reduce_generate() {
     ELIF)
         case ${#rule[@]} in
         1) result='' ;;
-        *) result="$1; elif $3; then $5" ;;
+        *) result="$1; elif [[ $3 ]]; then $5" ;;
         esac
         ;;
-    IF) result="if $3; then ${*:5:3} fi" ;;
+    IF) result="if [[ $3 ]]; then ${*:5:3} fi" ;;
     STMT)
         # Tag the sub-type to the reduce result
         # (Need to strip the tag wherever STMT is used)
         result="${rule[1]}:$1"
         ;;
-    DOCUMENT)
+    DOC) # Similar to ARGS but produces commands instead of strings
         # Return when document is empty
         [[ ${#rule[@]} -ne 1 ]] || {
             result=''
@@ -382,13 +447,8 @@ bpt.__reduce_generate() {
         local stmt="${2#*:}"
 
         # Reduce the document
-
-        # Note 1: Since `result` is a nameref to `contents[#contents-#rhs]` and
-        #   the latter is passed in exactly as $1, the `result="$1"` command
-        #   is unnecessary here. Removing it improves performance.
-        # Note 2: Use `${stmt@Q}` is faster than `printf '%q' ${stmt}`
         case "$stmt_type" in
-        STR | IDENTIFIER) result+="{ e ${stmt@Q}; };" ;;
+        STR) result+="{ e ${stmt@Q}; };" ;;
         VAR) result+="{ e \"$stmt\"; };" ;;
         INCLUDE) result+="$stmt" ;;
         FORIN | IF) result+="{ $stmt; };" ;;
@@ -448,7 +508,7 @@ bpt.__reduce_generate() {
 #   precidence than `or`. (Solves shift-reduce conflict with subclassing).
 # See: https://ece.uwaterloo.ca/~vganesh/TEACHING/W2014/lectures/lecture08.pdf
 #
-# Note2: the `IDENTIFIER -> id`, `STR -> str | NL`, and `NL -> nl` rules are not
+# Note2: the `ID -> id`, `STR -> str | NL`, and `NL -> nl` rules are not
 #   redundant. They are for better controls when hooking the reduce function.
 bpt.process() (
     local -r ld="$1" rd="$2" debug="$4"
