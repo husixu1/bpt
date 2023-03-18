@@ -12,19 +12,16 @@ readonly __DEFINED_BPT_SH=1
 # $1: Parse table name.
 #   The parse table should be an associative array where the key is
 #   <state>,<token> and the value actions (s <k>/r <rule>/a/<k>).
-# $2: Scanner function (default to cat, i.e. read from stdin)
-#   The scanner should output <token-type> \n <token-content> per token read.
-# $3: Reduce function hook
+# $2: Reduce function hook
 #   Args that passed to this function:
 #     $1: The reduce rule (as a string). i.e. "LHS RHS1 RHS2 ..."
 #     ${@:1}: RHS contents.
 #   The reduce function should store the reduce result to the `result` variable.
-# $4: (optional) If set, enable debug.
+# $3: (optional) If set, enable debug.
 shlr.parse() (
     local -rn table="$1"
-    local -r scanner="${2:-cat}"
-    local -r reduce_fn="${3:-echo}"
-    if [[ -n $4 ]]; then local -r NDEBUG=false; else local -r NDEBUG=true; fi
+    local -r reduce_fn="${2:-echo}"
+    if [[ -n $3 ]]; then local -r NDEBUG=false; else local -r NDEBUG=true; fi
 
     # 99 should be enough...
     # I assume no one's writing a BNF with 99 RHSs ...
@@ -106,7 +103,7 @@ shlr.parse() (
             exit 1
             ;;
         esac
-    done < <("$scanner")
+    done
 )
 
 # The tokenizer for bpt
@@ -555,11 +552,8 @@ bpt.process() (
     }
     export -f __recursive_process
 
-    # Curry the scanner so that it can be passed to the parser
-    scanner() { bpt.scan "$ld" "$rd" <"$file"; }
-
     # Prase with the provided reduce function
-    shlr.parse PARSE_TABLE scanner "$reduce_fn" "$debug"
+    shlr.parse PARSE_TABLE "$reduce_fn" "$debug" < <(bpt.scan "$ld" "$rd" <"$file")
 )
 
 bpt.print_help() {
