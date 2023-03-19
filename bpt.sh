@@ -586,6 +586,42 @@ bpt.process() (
     shlr.parse PARSE_TABLE "$reduce_fn" __error_handler "$debug" < <(bpt.scan "$ld" "$rd" <"$file")
 )
 
+# $1: Left deilmiter
+# $2: Right delimiter
+# $3: File to process
+# $4: (optional) If set, enable debug.
+# shellcheck disable=SC2207
+bpt.fingerprint() {
+    local -r ld="$1" rd="$2" file="$3" debug="$4"
+
+    # Collect vars and includes
+    local -a vars=() incs=()
+    mapfile -t vars < <(bpt.__dedup "$(bpt.process "$ld" "$rd" bpt.__reduce_collect_vars "$infile" "$debug")")
+    mapfile -t incs < <(bpt.__dedup "$(bpt.process "$ld" "$rd" bpt.__reduce_collect_includes "$infile" "$debug")")
+    local fingerprint=''
+    local -a md5=()
+
+    # Hash this script (the generator)
+    md5=($(md5sum "${BASH_SOURCE[0]}")) && fingerprint+="M:${md5[0]}"
+
+    # Hash the file itself
+    md5=($(md5sum "$file")) && fingerprint+=":S:${md5[0]}"
+
+    # Digest the includes
+    for inc in "${incs[@]}"; do
+        md5=($(md5sum "$inc")) && fingerprint+=":I:${md5[0]}"
+    done
+    # Digest and check for missing vars
+    for var in "${vars[@]}"; do
+        md5=($(echo -n "${var}${!var}" | md5sum)) && fingerprint+=":V:${md5[0]}"
+    done
+
+    # Digest the digests
+    [[ $debug ]] && echo "[DBG] Raw fingerprint: $fingerprint"
+    md5=($(echo -n "${fingerprint}" | md5sum)) && fingerprint="${md5[0]}"
+    echo "$fingerprint"
+}
+
 bpt.print_help() {
     :
 }
@@ -593,37 +629,48 @@ bpt.print_help() {
 bpt.main() {
     local ld='{{' rd='}}'
     local infile=''
-    local reduce_fn=bpt.__reduce_generate
-    local post_process=eval
-    local scan=false
+    local cmd='' reduce_fn=bpt.__reduce_generate post_process=eval
     local debug=''
+
+    # Parse command
+    case "$1" in
+    scan | s) cmd=scan ;;
+    generate | g)
+        cmd=generate
+        reduce_fn=bpt.__reduce_generate
+        post_process='echo'
+        ;;
+    generate-eval | ge)
+        cmd=generate-eval
+        reduce_fn=bpt.__reduce_generate
+        post_process='eval'
+        ;;
+    collect-vars | cv)
+        cmd=collect-vars
+        reduce_fn=bpt.__reduce_collect_vars
+        post_process=bpt.__dedup
+        ;;
+    collect-includes | ci)
+        cmd=collect-includes
+        reduce_fn=bpt.__reduce_collect_includes
+        post_process=bpt.__dedup
+        ;;
+    collect-strings | cs)
+        cmd=collect-strings
+        reduce_fn=bpt.__reduce_collect_toplevel_strings
+        post_process='echo'
+        ;;
+    fingerprint | f)
+        cmd=fingerprint
+        ;;
+    esac
+    shift
 
     # Parse arguments
     while [[ $# -gt 0 ]]; do
         case "$1" in
         -l | --left-delimiter) shift && ld="$1" ;;
         -r | --right-delimiter) shift && rd="$1" ;;
-        -s | --scan) scan=true ;;
-        -ge | --generate-eval)
-            reduce_fn=bpt.__reduce_collect_vars
-            post_process='eval'
-            ;;
-        -cv | --collect-vars)
-            reduce_fn=bpt.__reduce_collect_vars
-            post_process=bpt.__dedup
-            ;;
-        -ci | --collect-includes)
-            reduce_fn=bpt.__reduce_collect_includes
-            post_process=bpt.__dedup
-            ;;
-        -cs | --collect-strings)
-            reduce_fn=bpt.__reduce_collect_toplevel_strings
-            post_process='echo'
-            ;;
-        -g | --generate)
-            reduce_fn=bpt.__reduce_generate
-            post_process='echo'
-            ;;
         -d | --debug) debug=1 ;;
         *)
             [[ -z $infile ]] || {
@@ -656,13 +703,13 @@ bpt.main() {
 		EOF
     }
 
-    if $scan; then
-        bpt.scan "$ld" "$rd" <"$infile"
-    else
-        # Process templates
-        result="$(bpt.process "$ld" "$rd" "$reduce_fn" "$infile" "$debug")" &&
-            $post_process "$HEADER$result"
-    fi
+    # Execute command
+    case "$cmd" in
+    scan) bpt.scan "$ld" "$rd" <"$infile" ;;
+    fingerprint) bpt.fingerprint "$ld" "$rd" "$infile" "$debug" ;;
+    *) result="$(bpt.process "$ld" "$rd" "$reduce_fn" "$infile" "$debug")" &&
+        $post_process "$HEADER$result" ;;
+    esac
 }
 
 (return 0 2>/dev/null) || bpt.main "$@"
