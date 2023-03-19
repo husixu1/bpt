@@ -35,7 +35,10 @@ bpt.__lr_parse() (
 
     # Parse stack and associatied content stack
     # Using string manipulation for states is faster than using an array.
-    local -a states=':0' contents=('')
+    local states=':0' stack_size=1
+    # Large dict indexing is significantly faster than a regular one.
+    # Thus we use stack_size + associative array to emulate a regular array.
+    local -A contents=([0]='')
     # Look-ahead token and its content
     local token='' content=''
     # Location tracking variables
@@ -46,7 +49,8 @@ bpt.__lr_parse() (
         $NDEBUG ||
             echo "[DBG] ${states##*:} Shift $1 \`$content\`" >&2
         states+=":$1"
-        contents+=("$content")
+        contents["$stack_size"]="$content"
+        ((++stack_size))
         token='' content=''
     }
 
@@ -67,20 +71,22 @@ bpt.__lr_parse() (
         states+=":${table["${states##*:},${rule[0]}"]}"
 
         # Run reduce hook, discard reduced contents, and save the reduce result
-        local -n result="contents[$((${#contents[@]} - num_rhs))]"
-        $reduce_fn "$1" "${contents[@]:${#contents[@]}-$num_rhs}" || exit 1
+        local -n result="contents[$((stack_size - num_rhs))]"
+        local i=0 b=$((stack_size - num_rhs)) e=$((stack_size))
+        local args=''
+        for ((i = b; i < e; ++i)); do args+=" \"\${contents[$i]}\""; done
 
-        # The following is faster than:
-        #   contents=("${contents[@]:0:${#contents[@]}-$num_rhs}")
-        # since it avoides copy large strings.
-        local i=0 b=$((${#contents[@]} - 1)) e=$((${#contents[@]} - num_rhs + 1))
+        eval "$reduce_fn ${1@Q} $args" || exit 1
+
+        local i=0 b=$((stack_size - 1)) e=$((stack_size - num_rhs + 1))
         for ((i = b; i >= e; --i)); do unset "contents[$i]"; done
+        stack_size="$e"
     }
 
     # Simply print the result
     __accept() {
         $NDEBUG || echo "[DBG] Result accepted" >&2
-        printf '%s' "${contents[@]}"
+        printf '%s' "${contents[1]}"
     }
 
     # Default error handler
