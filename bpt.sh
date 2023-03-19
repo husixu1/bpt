@@ -549,7 +549,7 @@ bpt.process() (
     local -a file_stack=("${file_stack[@]}")
 
     [[ -f $file ]] || {
-        echo "Error: file '$file' does not exist"
+        echo "Error: file '$file' does not exist" >&2
         return 1
     }
     file_stack+=("$file")
@@ -662,6 +662,11 @@ bpt.main() {
         ;;
     fingerprint | f)
         cmd=fingerprint
+        ;;
+    *)
+        echo "Unrecognized command '$1'" >&2
+        bpt.print_help
+        exit 1
         ;;
     esac
     shift
