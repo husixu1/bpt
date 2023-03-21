@@ -46,8 +46,6 @@ bpt.__lr_parse() (
 
     # $1: Goto state after shift
     __shift() {
-        $NDEBUG ||
-            echo "[DBG] ${states##*:} Shift $1 \`$content\`" >&2
         states+=":$1"
         contents["$stack_size"]="$content"
         ((++stack_size))
@@ -56,9 +54,6 @@ bpt.__lr_parse() (
 
     # $1: Rule
     __reduce() {
-        $NDEBUG ||
-            echo "[DBG] ${states##*:} Reduce $1" >&2
-
         # shellcheck disable=SC2206
         # Although not robust, word splitting is faster than
         #   read -ra rule <<<"$1"
@@ -85,7 +80,6 @@ bpt.__lr_parse() (
 
     # Simply print the result
     __accept() {
-        $NDEBUG || echo "[DBG] Result accepted" >&2
         printf '%s' "${contents[1]}"
     }
 
@@ -94,6 +88,25 @@ bpt.__lr_parse() (
         echo "Error: Line $(($1 + 1)) Column $(($2 + 1))"
         echo "$3"
     } >&2
+
+    # Debugging support
+    $NDEBUG || {
+        eval __orig"$(declare -f __shift)"
+        eval __orig"$(declare -f __reduce)"
+        eval __orig"$(declare -f __accept)"
+        __shift() {
+            echo "[DBG] ${states##*:} Shift $1 \`$content\`" >&2
+            __orig__shift "$@"
+        }
+        __reduce() {
+            echo "[DBG] ${states##*:} Reduce ${rule[*]}" >&2
+            __orig__reduce
+        }
+        __accept() {
+            $NDEBUG || echo "[DBG] Result accepted" >&2
+            __orig__accept
+        }
+    }
 
     while true; do
         [[ -n $token ]] || {
