@@ -6,6 +6,16 @@
 if [[ -n $__DEFINED_BPT_SH ]]; then return; fi
 readonly __DEFINED_BPT_SH=1
 
+# Add multiple traps for EXIT (see: https://stackoverflow.com/questions/3338030)
+bpt.__add_exit_trap() {
+    trap_add_cmd=${1:?${FUNCNAME[0]} usage error}
+    trap -- "$(
+        extract_trap_cmd() { printf '%s\n' "$3"; }
+        eval "extract_trap_cmd $(trap -p EXIT)"
+        printf '%s\n' "${trap_add_cmd}"
+    )" EXIT || echo "Unable to add to trap" >&2
+}
+
 # The shift-reduce LR(1) parser.
 # $1: Parse table name.
 #   The parse table should be an associative array where the key is
@@ -682,6 +692,7 @@ bpt.main() {
         -d | --debug) debug=1 ;;
         *)
             [[ -z $infile ]] || {
+                echo "Error: Option '$1' not recognized." >&2
                 bpt.print_help
                 return 1
             }
@@ -690,6 +701,13 @@ bpt.main() {
         esac
         shift
     done
+
+    # If file not provided, read into a temporary file and use that file.
+    [[ -n $infile ]] || {
+        infile="$(mktemp)" || { echo "Error: mktemp failed." >&2 && exit 1; }
+        bpt.__add_exit_trap "rm -f \"${infile:?}\""
+        cat >"${infile:?}"
+    }
 
     # Global constants for pretty-printing
     local -rA BPT_PP_TOKEN_TABLE=(
