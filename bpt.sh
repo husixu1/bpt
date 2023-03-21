@@ -7,40 +7,43 @@ if [[ -n $__DEFINED_BPT_SH ]]; then return; fi
 readonly __DEFINED_BPT_SH=1
 
 # The shift-reduce LR(1) parser.
-#
 # $1: Parse table name.
 #   The parse table should be an associative array where the key is
 #   <state>,<token> and the value actions (s <k>/r <rule>/a/<k>).
 # $2: Reduce function hook
-#   Args passed to this function:
-#     $1: The reduce rule (as a string). i.e. "LHS RHS1 RHS2 ..."
-#     ${@:1}: RHS contents.
-#   The reduce function should store the reduce result to the `result` variable.
+#   This function can access `rule=(LHS RHS1 RHS2 ...)`.
+#   This function can access the RHS(i+1)'s content': `${contents[$((s + i))]}`.
+#   This function should store the reduce result to `contents[$s]`.
 # $3: Error handler function hook
 #   Args passed to this function:
 #     $1: Line
 #     $2: Column
 #     $3: Default error message
 # $4: (optional) If set, enable debug.
+# shellcheck disable=SC2030 # Modification to `contents` and `rule` are local.
 bpt.__lr_parse() (
     local -rn table="$1"
     local -r reduce_fn="${2:-echo}"
     local -r error_fn="${3:-__error}"
     if [[ -n $4 ]]; then local -r NDEBUG=false; else local -r NDEBUG=true; fi
 
-    # 99 should be enough ...
-    # I assume no one's writing a BNF with 99 RHSs ...
+    # 20 should be enough ...
+    # I assume no one's writing a BNF with more than 20 RHSs ...
     local -a STATE_PTRN=('')
-    for i in {1..99}; do STATE_PTRN[i]="${STATE_PTRN[i - 1]}:*"; done
+    for i in {1..20}; do STATE_PTRN[i]="${STATE_PTRN[i - 1]}:*"; done
 
-    # Parse stack and associatied content stack
-    # Using string manipulation for states is faster than using an array.
+    # Parse stack
+    #   Using string manipulation for states is faster than using an array.
     local states=':0' stack_size=1
-    # Large dict indexing is significantly faster than a regular one.
-    # Thus we use stack_size + associative array to emulate a regular array.
+    # Contents stack associatied wit the parse stack
+    #   Large dict indexing is significantly faster than a regular one.
+    #   Thus we use stack_size + associative array to emulate a regular array.
     local -A contents=([0]='')
-    # Look-ahead token and its content
-    local token='' content=''
+
+    # Current reduction rule
+    local -a rule=()
+    # Current look-ahead token and its content
+    local token='' content='' action=''
     # Location tracking variables
     local num_lines=0 num_bytes=0
 
@@ -54,10 +57,8 @@ bpt.__lr_parse() (
 
     # $1: Rule
     __reduce() {
+        # Although not robust, word splitting is faster than `read`
         # shellcheck disable=SC2206
-        # Although not robust, word splitting is faster than
-        #   read -ra rule <<<"$1"
-        local -a rule=($1)
         local num_rhs=$((${#rule[@]} - 1))
 
         # Reduce and goto state
@@ -65,17 +66,12 @@ bpt.__lr_parse() (
         states="${states%${STATE_PTRN[$num_rhs]}}"
         states+=":${table["${states##*:},${rule[0]}"]}"
 
-        # Run reduce hook, discard reduced contents, and save the reduce result
-        local -n result="contents[$((stack_size - num_rhs))]"
-        local i=0 b=$((stack_size - num_rhs)) e=$((stack_size))
-        local args=''
-        for ((i = b; i < e; ++i)); do args+=" \"\${contents[$i]}\""; done
+        # Reduction start location (on the contents stack)
+        local s=$((stack_size - num_rhs))
 
-        eval "$reduce_fn ${1@Q} $args" || exit 1
-
-        local i=0 b=$((stack_size - 1)) e=$((stack_size - num_rhs + 1))
-        for ((i = b; i >= e; --i)); do unset "contents[$i]"; done
-        stack_size="$e"
+        # Run reduce hook (which saves the reduce result to `contents[$s]`)
+        $reduce_fn || exit 1
+        stack_size=$((s + 1))
     }
 
     # Simply print the result
@@ -111,16 +107,21 @@ bpt.__lr_parse() (
     while true; do
         [[ -n $token ]] || {
             read -r token num_lines num_bytes
-            local OIFS="$IFS" && IFS=''
-            read -r content
-            IFS="$OIFS"
+            IFS= read -r content
         }
 
         action="${table["${states##*:},$token"]}"
         case "$action" in
-        s*) __shift "${action#s }" ;;  # Shift
-        r*) __reduce "${action#r }" ;; # Reduce
-        a) __accept && break ;;        # Accept
+        # Shift
+        s*) __shift "${action#s }" ;;
+        # Reduce
+        r*) # shellcheck disable=SC2206
+            rule=(${action#r })
+            __reduce
+            ;;
+        # Accept
+        a) __accept && break ;;
+        # Error
         '')
             local expects='' rule_key=''
             for rule_key in "${!table[@]}"; do
@@ -134,7 +135,7 @@ bpt.__lr_parse() (
             $NDEBUG || echo "[DBG] PARSER STATES ${states} TOKEN ${token} CONTENT ${content}." >&2
             exit 1
             ;;
-        *) # Parse Table Error
+        *) # Parse table error (internal error)
             echo "Internal error: STATES ${states} TOKEN ${token} CONTENT ${content}. " >&2
             echo "Internal error: action '$action' not recognized." >&2
             exit 1
@@ -307,122 +308,128 @@ bpt.__test_delims() {
 }
 
 # The reduce function to collect all variables
+# shellcheck disable=SC2031 # Direct access of `rule` and `contents` for speed.
 bpt.__reduce_collect_vars() {
-    # Note: When using position argument ($@), index is 1-based.
-    # shellcheck disable=SC2206
-    local -a rule=($1)
-    shift
-
     case "${rule[0]}" in
-    NL | UOP | BOP) result='' ;;
+    NL | UOP | BOP) contents[$s]='' ;;
     VAR)
-        result="$2"$'\n'
-        [[ ${#rule[@]} -eq 4 || ${rule[4]} != VAR ]] || result+="$4"
+        contents[$s]="${contents[$((s + 1))]}"$'\n'
+        [[ ${#rule[@]} -eq 4 || ${rule[4]} != VAR ]] || contents[$s]+="${contents[$((s + 3))]}"
         ;;
-    BUILTIN) result="$4" ;;
-    INCLUDE) result="$(__recursive_process "$4")"$'\n' ;;
+    BUILTIN) contents[$s]="${contents[$((s + 3))]}" ;;
+    INCLUDE) contents[$s]="$(__recursive_process "${contents[$((s + 3))]}")"$'\n' ;;
     FORIN)
-        result=''
+        contents[$s]=''
         local var
         while read -r var; do
-            [[ -z $var || $var == "$3" ]] || result+="$var"$'\n'
-        done <<<"$7"
+            [[ -z $var || $var == "${contents[$((s + 2))]}" ]] || contents[$s]+="$var"$'\n'
+        done <<<"${contents[$((s + 6))]}"
         ;;
     BOOL)
         case "${#rule[@]}" in
-        3) result="$2" ;;
-        4) result="$1$3" ;;
+        3) contents[$s]="${contents[$((s + 1))]}" ;;
+        4) contents[$s]+="${contents[$((s + 2))]}" ;;
         esac
         ;;
     BOOLA)
         case "${#rule[@]}" in
         4) case "${rule[1]}" in
-            lp) result="$2" ;;
-            BOOLA) result="$1$3" ;;
+            lp) contents[$s]="${contents[$((s + 1))]}" ;;
+            BOOLA) contents[$s]+="${contents[$((s + 2))]}" ;;
             esac ;;
-        6) result="$1$4" ;;
+        6) contents[$s]+="${contents[$((s + 3))]}" ;;
         esac
         ;;
-    BOOLO) [[ "${#rule}" -eq 2 ]] || result+="$3" ;;
-    ELSE) result="$3" ;;
-    ELIF) result="$3$5" ;;
-    IF) result="$3$5$6$7" ;;
-    STMT) case "${rule[1]}" in STR) result='' ;; *) result="$1" ;; esac ;;
-    *) local OIFS="$IFS" && IFS='' && result="$*" && IFS="$OIFS" ;;
+    BOOLO) [[ "${#rule[@]}" -eq 2 ]] || contents[$s]+="${contents[$((s + 2))]}" ;;
+    ELSE)
+        [[ "${#rule[@]}" -ne 1 ]] || { contents[$s]='' && return; }
+        contents[$s]="${contents[$((s + 2))]}"
+        ;;
+    ELIF)
+        [[ "${#rule[@]}" -ne 1 ]] || { contents[$s]='' && return; }
+        contents[$s]="${contents[$((s + 2))]}${contents[$((s + 4))]}"
+        ;;
+    IF) contents[$s]="${contents[$((s + 2))]}${contents[$((s + 4))]}${contents[$((s + 5))]}${contents[$((s + 6))]}" ;;
+    STMT) [[ "${rule[1]}" != STR ]] || contents[$s]='' ;;
+    *)
+        [[ "${#rule[@]}" -ne 1 ]] || { contents[$s]='' && return; }
+        local i=1
+        for (( ; i < ${#rule[@]} - 1; ++i)); do
+            contents[$s]+="${contents[$((s + i))]}"
+        done
+        ;;
     esac
 }
 
+# The reduce function to collect all includes
+# shellcheck disable=SC2031
 bpt.__reduce_collect_includes() {
-    # shellcheck disable=SC2206
-    local -a rule=($1)
-    shift
-
     case "${rule[0]}" in
-    STR) result="$1" ;;
-    INCLUDE) result="$4"$'\n' && result+="$(__recursive_process "$4")" ;;
-    STMT) case "${rule[1]}" in INCLUDE) result="$1" ;; *) result='' ;; esac ;;
-    *) local OIFS="$IFS" && IFS='' && result="$*" && IFS="$OIFS" ;;
+    INCLUDE)
+        contents[$s]="${contents[$((s + 3))]}"$'\n'
+        contents[$s]+="$(__recursive_process "${contents[$((s + 3))]}")"
+        ;;
+    STMT) [[ "${rule[1]}" == INCLUDE ]] || contents[$s]='' ;;
+    *)
+        [[ "${#rule[@]}" -ne 1 ]] || { contents[$s]='' && return; }
+        local i=1
+        for (( ; i < ${#rule[@]} - 1; ++i)); do
+            contents[$s]+="${contents[$((s + i))]}"
+        done
+        ;;
     esac
 }
 
 # The reduce function to generate the template
+# shellcheck disable=SC2031
 bpt.__reduce_generate() {
-    # shellcheck disable=SC2206
-    local -a rule=($1)
-    shift
-
     case "${rule[0]}" in
-    NL) result=$'\n' ;;
-    STR | ID | UOP | BOP) result="$1" ;;
+    NL) contents[$s]=$'\n' ;;
+    # Note: Since `contents[$s]` is exactly the first RHS, the
+    #   `${contents[$s]}="${contents[$s]}"` assignment is unnecessary here.
+    STR | ID | UOP | BOP) ;;
     VAR)
         case "${rule[3]}" in
-        rd) result="\${$2}" ;;
-        or) result="\${$2:-\$(e " ;;&
-        and) result="\${$2:+\$(e " ;;&
+        rd) contents[$s]="\${${contents[$((s + 1))]}}" ;;
+        or) contents[$s]="\${${contents[$((s + 1))]}:-\$(e " ;;&
+        and) contents[$s]="\${${contents[$((s + 1))]}:+\$(e " ;;&
         *) case "${rule[4]}" in
-            VAR) result+="\"$4\")}" ;;
-            STR) result+="${4@Q})}" ;;
+            VAR) contents[$s]+="\"${contents[$((s + 3))]}\")}" ;;
+            STR) contents[$s]+="${contents[$((s + 3))]@Q})}" ;;
             esac ;;
         esac
         ;;
     ARGS)
-        [[ ${#rule[@]} -ne 1 ]] || {
-            result=''
-            return
-        }
+        [[ "${#rule[@]}" -ne 1 ]] || { contents[$s]='' && return; }
         # Strip the tag from STMT
-        local stmt_type="${2%%:*}"
-        local stmt="${2#*:}"
+        local stmt_type="${contents[$((s + 1))]%%:*}"
+        local stmt="${contents[$((s + 1))]#*:}"
 
-        # Note 1: Since `result` is a nameref to `contents[#contents-#rhs]` and
-        #   the latter is passed in exactly as $1, the `result="$1"` command
-        #   is unnecessary here. Removing it improves performance.
-        # Note 2: Use `${stmt@Q}` is faster than `printf '%q' ${stmt}`
+        # Note: `${stmt@Q}` is faster than `printf '%q' ${stmt}`
         case "$stmt_type" in
-        STR) result+=" ${stmt@Q} " ;;
-        VAR | BUILTIN) result+=" $stmt " ;;
-        INCLUDE | FORIN | IF) result+=" \"\$($stmt)\" " ;;
+        STR) contents[$s]+=" ${stmt@Q} " ;;
+        VAR | BUILTIN) contents[$s]+=" $stmt " ;;
+        INCLUDE | FORIN | IF) contents[$s]+=" \"\$($stmt)\" " ;;
         esac
         ;;
     BUILTIN)
-        # filter allowed builtints
-        case "$2" in
-        len | seq) result="\$($2 $4)" ;;
-        quote) result="\"$4\"" ;;
-        *) echo "Unrecognized builtin function $2" >&2 && exit 1 ;;
+        # Filter allowed builtints
+        case "${contents[$((s + 1))]}" in
+        len | seq) contents[$s]="\$(${contents[$((s + 1))]} ${contents[$((s + 3))]})" ;;
+        quote) contents[$s]="\"${contents[$((s + 3))]}\"" ;;
+        *) echo "Unrecognized builtin function ${contents[$((s + 1))]}" >&2 && exit 1 ;;
         esac
         ;;
-    INCLUDE) result="$(__recursive_process "$4")" ;;
-    FORIN) result="for $3 in $5; do $7 done" ;;
+    INCLUDE) contents[$s]="$(__recursive_process "${contents[$((s + 3))]}")" ;;
+    FORIN) contents[$s]="for ${contents[$((s + 2))]} in ${contents[$((s + 4))]}; do ${contents[$((s + 6))]} done" ;;
     BOOL)
         case "${#rule[@]}" in
-        3) result="$*" ;; # UOP BOOL
+        3) contents[$s]="${contents[$s]}${contents[$((s + 1))]}" ;;
         *)
-            # Don't use the name contents (avoid nameref collision)
             local -a rhss=()
             # Strip the tag from STMT
-            local stmt_l_type="${1%%:*}"
-            local stmt_l="${1#*:}"
+            local stmt_l_type="${contents[$s]%%:*}"
+            local stmt_l="${contents[$s]#*:}"
             case "$stmt_l_type" in
             ID | STR) rhss[0]="\$(e ${stmt_l@Q})" ;;
             VAR) rhss[0]="\"$stmt_l\"" ;;
@@ -430,64 +437,61 @@ bpt.__reduce_generate() {
             esac
             # If rule is STMT op STMT, deal with op and RHS
             [[ ${#rule[@]} -eq 2 ]] || {
-                rhss[1]="$2"
-                local stmt_r_type="${3%%:*}"
-                local stmt_r="${3#*:}"
+                rhss[1]="${contents[$((s + 1))]}"
+                local stmt_r_type="${contents[$((s + 2))]%%:*}"
+                local stmt_r="${contents[$((s + 2))]#*:}"
                 case "$stmt_r_type" in
                 ID | STR) rhss[2]="\$(e ${stmt_r@Q})" ;;
                 VAR) rhss[2]="\"$stmt_r\"" ;;
                 *) rhss[2]="\$(${stmt_r})" ;;
                 esac
             }
-            result="${rhss[*]}"
+            contents[$s]="${rhss[*]}"
             ;;
         esac
         ;;
-    BOOLA) # For BOOLA->BOOL (case 2), result is already $1, thus no-op.
+    BOOLA)
         case "${#rule[@]}" in
         4) case "${rule[1]}" in
-            BOOLA) result="$1 && $3" ;;
-            lp) result="( $2 )" ;;
+            BOOLA) contents[$s]="${contents[$s]} && ${contents[$((s + 2))]}" ;;
+            lp) contents[$s]="( ${contents[$((s + 1))]} )" ;;
             esac ;;
-        6) result="$1 && ( $4 )" ;;
+        6) contents[$s]="${contents[$s]} && ( ${contents[$((s + 3))]} )" ;;
         esac
         ;;
-    BOOLO) [[ ${#rule[@]} -eq 2 ]] || result="$1 || $3" ;;
+    BOOLO) [[ ${#rule[@]} -eq 2 ]] || contents[$s]="${contents[$s]} || ${contents[$((s + 2))]}" ;;
     ELSE)
         case "${#rule[@]}" in
-        1) result='' ;;
-        *) result="else $3" ;;
+        1) contents[$s]='' ;;
+        *) contents[$s]="else ${contents[$((s + 2))]}" ;;
         esac
         ;;
     ELIF)
         case "${#rule[@]}" in
-        1) result='' ;;
-        *) result="$1; elif [[ $3 ]]; then $5" ;;
+        1) contents[$s]='' ;;
+        *) contents[$s]="${contents[$s]}; elif [[ ${contents[$((s + 2))]} ]]; then ${contents[$((s + 4))]}" ;;
         esac
         ;;
-    IF) result="if [[ $3 ]]; then ${*:5:3} fi" ;;
+    IF) contents[$s]="if [[ ${contents[$((s + 2))]} ]]; then ${contents[$((s + 4))]}${contents[$((s + 5))]}${contents[$((s + 6))]} fi" ;;
     STMT)
         # Tag the sub-type to the reduce result
         # (Need to strip the tag wherever STMT is used)
-        result="${rule[1]}:$1"
+        contents[$s]="${rule[1]}:${contents[$s]}"
         ;;
     DOC) # Similar to ARGS but produces commands instead of strings
         # Return when document is empty
-        [[ ${#rule[@]} -ne 1 ]] || {
-            result=''
-            return
-        }
+        [[ "${#rule[@]}" -ne 1 ]] || { contents[$s]='' && return; }
 
         # Strip the tag from STMT
-        local stmt_type="${2%%:*}"
-        local stmt="${2#*:}"
+        local stmt_type="${contents[$((s + 1))]%%:*}"
+        local stmt="${contents[$((s + 1))]#*:}"
 
         # Reduce the document
         case "$stmt_type" in
-        STR) result+="{ e ${stmt@Q}; };" ;;
-        BUILTIN | VAR) result+="{ e \"$stmt\"; };" ;;
-        INCLUDE) result+="$stmt" ;;
-        FORIN | IF) result+="{ $stmt; };" ;;
+        STR) contents[$s]+="{ e ${stmt@Q}; };" ;;
+        BUILTIN | VAR) contents[$s]+="{ e \"$stmt\"; };" ;;
+        INCLUDE) contents[$s]+="$stmt" ;;
+        FORIN | IF) contents[$s]+="{ $stmt; };" ;;
         esac
         ;;
     *) echo "Internal error: Rule ${rule[*]} not recognized" >&2 ;;
