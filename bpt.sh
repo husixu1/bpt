@@ -189,7 +189,7 @@ bpt.scan() {
     local -ra KW=(
         "${e_ld}" "${e_rd}"
         '-eq' '-ne' '-gt' '-lt' '-ge' '-le'
-        '==' '!=' '>' '<' ':' '\!' '\"' "\\'" '\(' '\)'
+        '==' '!=' '>' '<' ':' '\!' '"' "'" '\(' '\)'
         'and' 'or' 'if' 'elif' 'else' 'for' 'in' 'include'
     )
     local -r KW_RE="$(IFS='|' && echo -n "${KW[*]}")"
@@ -231,19 +231,21 @@ bpt.scan() {
                 printf '%s\n' "$content"
             elif [[ -n $quote ]]; then
                 # Inside quotes in `ld ... rd`
-                local string=''
-                if [[ $line =~ "\\"${quote} ]]; then
+                local string='' line_copy="$line" && content=''
+                while [[ $line_copy =~ ^[^${quote}]*\\${quote} ]]; do
                     # Escape quote inside string
-                    string="${line%%"\\${quote}"*}${quote}"
-                    content="${line%%"\\${quote}"*}""\\${quote}"
-                elif [[ $line =~ ${quote} ]]; then
+                    string+="${line_copy%%"\\${quote}"*}${quote}"
+                    content+="${line_copy%%"\\${quote}"*}\\${quote}"
+                    line_copy="${line_copy#"${BASH_REMATCH[0]}"}"
+                done
+                if [[ $line_copy =~ ${quote} ]]; then
                     # Ending quote
-                    string="${line%%"${quote}"*}"
+                    string+="${line_copy%%"${quote}"*}"
                     # Remove the closing " from the contnet
-                    content="$string"'"'
+                    content+="${line_copy%%"${quote}"*}${quote}"
                     quote=''
                 else
-                    content="$line"
+                    content+="$line_copy"
                 fi
                 [[ -z "$string" ]] || {
                     echo "str $num_lines $num_bytes"
