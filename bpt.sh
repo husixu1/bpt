@@ -352,20 +352,6 @@ bpt.__reduce_collect_includes() {
     esac
 }
 
-# The reduce function to collect all top-level strings, discarding all else.
-bpt.__reduce_collect_toplevel_strings() {
-    # shellcheck disable=SC2206
-    local -a rule=($1)
-    shift
-
-    case "${rule[0]}" in
-    STR) result="$1" ;;
-    NL) result=$'\n' ;;
-    STMT) case "${rule[1]}" in STR) result="$1"$'\n' ;; *) result='' ;; esac ;;
-    *) local OIFS="$IFS" && IFS='' && result="$*" && IFS="$OIFS" ;;
-    esac
-}
-
 # The reduce function to generate the template
 bpt.__reduce_generate() {
     # shellcheck disable=SC2206
@@ -659,11 +645,6 @@ bpt.main() {
         cmd=collect-includes
         reduce_fn=bpt.__reduce_collect_includes
         post_process=bpt.__dedup
-        ;;
-    collect-strings | cs)
-        cmd=collect-strings
-        reduce_fn=bpt.__reduce_collect_toplevel_strings
-        post_process='echo'
         ;;
     fingerprint | f)
         cmd=fingerprint
