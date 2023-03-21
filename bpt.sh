@@ -200,7 +200,7 @@ bpt.scan() {
     while read -r line; do
         # Only count newlines outside `ld ... rd` and inside quotes.
         if [[ $num_lines -gt 0 && ($num_ld -eq 0 || -n $quote) ]]; then
-            echo nl
+            echo "nl $num_lines $num_bytes"
             echo ''
         fi
         # Scan the line
@@ -219,7 +219,8 @@ bpt.scan() {
                     echo -n str
                 fi
                 echo " $num_lines $num_bytes"
-                echo "$content"
+                # `$content` can be a literal `-ne`. Thus printf is needed.
+                printf '%s\n' "$content"
             elif [[ -n $quote ]]; then
                 # Inside quotes in `ld ... rd`
                 local string=''
@@ -238,7 +239,7 @@ bpt.scan() {
                 fi
                 [[ -z "$string" ]] || {
                     echo "str $num_lines $num_bytes"
-                    echo "$string"
+                    printf '%s\n' "$string"
                 }
             elif [[ $line =~ ^(${KW_RE}) ]]; then
                 # Inside `ld ... rd` and matches a keyword at front
@@ -273,7 +274,7 @@ bpt.scan() {
                 esac
                 [[ -n $quote ]] || {
                     echo " $num_lines $num_bytes"
-                    echo "$content"
+                    printf '%s\n' "$content"
                 }
             else # Inside `ld ... rd` but outside quotes
                 # Ignore spaces inside `ld ... rd`
@@ -289,12 +290,12 @@ bpt.scan() {
                     content="${content%%"${BASH_REMATCH[1]}"*}"
                 fi
                 if [[ ! $content =~ ^(${ID_RE}) ]]; then
-                    echo "$content is not a valid identifier" >&2
+                    printf '%s\n' "$content is not a valid identifier" >&2
                     return 1
                 fi
                 content="${BASH_REMATCH[1]}"
                 echo "id $num_lines $num_bytes"
-                echo "$content"
+                printf '%s\n' "$content"
             fi
             line="${line#"$content"}"
             ((num_bytes += ${#content}))
