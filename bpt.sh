@@ -174,8 +174,16 @@ bpt.__lr_parse() (
 #   id: [[:alpha:]_][[:alnum:]_]*
 bpt.scan() {
     local -r ld="$1" rd="$2"
-    local -r e_ld="$(printf '%q' "$ld")" e_rd="$(printf '%q' "$rd")"
     bpt.__test_delims "$ld" "$rd" || return 1
+
+    # See man regex.7. We need to escape the meta characters of POSIX regex.
+    local -rA ESC=(
+        ['^']=\\ ['.']=\\ ['[']=\\ ['$']=\\ ['(']=\\ [')']=\\
+        ['|']=\\ ['*']=\\ ['+']=\\ ['?']=\\ ['{']=\\ [\\]=\\
+    )
+    local e_ld='' e_rd='' i=0
+    for ((i = 0; i < ${#ld}; ++i)); do e_ld+="${ESC["${ld:i:1}"]}${ld:i:1}"; done
+    for ((i = 0; i < ${#rd}; ++i)); do e_rd+="${ESC["${rd:i:1}"]}${rd:i:1}"; done
 
     # Keywords
     local -ra KW=(
