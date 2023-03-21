@@ -117,7 +117,7 @@ bpt.__lr_parse() (
     while true; do
         [[ -n $token ]] || {
             read -r token num_lines num_bytes
-            IFS= read -r content
+            IFS= read -r content || return 1
         }
 
         action="${table["${states##*:},$token"]}"
@@ -157,6 +157,11 @@ bpt.__lr_parse() (
 # The tokenizer for bpt
 # $1: Left deilmiter
 # $2: Right delimiter
+# $3: Error handler function hook
+#   Args passed to this function:
+#     $1: Line
+#     $2: Column
+#     $3: Default error message
 #
 # Terminal token name to content mappings:
 #   str: Anything outside the toplevel `ld ... rd` or
@@ -173,8 +178,14 @@ bpt.__lr_parse() (
 #   and|or|if|elif|else|for|in|include: <as is>
 #   id: [[:alpha:]_][[:alnum:]_]*
 bpt.scan() {
-    local -r ld="$1" rd="$2"
+    local -r ld="$1" rd="$2" error_fn="${3:-__error}"
     bpt.__test_delims "$ld" "$rd" || return 1
+
+    # Default error handler
+    __error() {
+        echo "Error: Line $(($1 + 1)) Column $(($2 + 1))"
+        echo "$3"
+    } >&2
 
     # See man regex.7. We need to escape the meta characters of POSIX regex.
     local -rA ESC=(
@@ -269,7 +280,7 @@ bpt.scan() {
                     ;;
                 "$rd")
                     [[ -n $num_ld ]] || {
-                        echo "Extra '$rd'."
+                        $error_fn "$num_lines" "$num_bytes" "Extra '$rd'."
                         return 1
                     }
                     ((--num_ld))
@@ -278,7 +289,8 @@ bpt.scan() {
                 and | or | if | elif | else) ;&
                 for | in | include) echo -n "$content" ;;
                 *)
-                    echo "Internal error: Unrecognized token ${content}" >&2
+                    $error_fn "$num_lines" "$num_bytes" \
+                        "Internal error: Unrecognized token ${content}"
                     return 1
                     ;;
                 esac
@@ -300,7 +312,8 @@ bpt.scan() {
                     content="${content%%"${BASH_REMATCH[1]}"*}"
                 fi
                 if [[ ! $content =~ ^(${ID_RE}) ]]; then
-                    printf '%s\n' "$content is not a valid identifier" >&2
+                    $error_fn "$num_lines" "$num_bytes" \
+                        "'$content' is not a valid identifier"
                     return 1
                 fi
                 content="${BASH_REMATCH[1]}"
@@ -612,7 +625,8 @@ bpt.process() (
     } >&2
 
     # Prase with the provided reduce function
-    bpt.__lr_parse BPT_PARSE_TABLE "$reduce_fn" __error_handler "$debug" < <(bpt.scan "$ld" "$rd" <"$file")
+    bpt.__lr_parse BPT_PARSE_TABLE "$reduce_fn" __error_handler "$debug" \
+        < <(bpt.scan "$ld" "$rd" __error_handler <"$file")
 )
 
 # $1: Left deilmiter
