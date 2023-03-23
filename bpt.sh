@@ -512,7 +512,7 @@ bpt.__reduce_generate() {
     ELIF)
         case "${#rule[@]}" in
         1) contents[$s]='' ;;
-        *) contents[$s]="${contents[$s]}; elif [[ ${contents[$((s + 2))]} ]]; then ${contents[$((s + 4))]}" ;;
+        *) contents[$s]="${contents[$s]} elif [[ ${contents[$((s + 2))]} ]]; then ${contents[$((s + 4))]}" ;;
         esac
         ;;
     IF) contents[$s]="if [[ ${contents[$((s + 2))]} ]]; then ${contents[$((s + 4))]}${contents[$((s + 5))]}${contents[$((s + 6))]} fi" ;;
