@@ -480,7 +480,7 @@ bpt.__reduce_generate() {
         # Filter allowed builtints
         case "${contents[$((s + 1))]}" in
         len | seq) contents[$s]="\$(${contents[$((s + 1))]} ${contents[$((s + 3))]})" ;;
-        quote) contents[$s]="\"${contents[$((s + 3))]}\"" ;;
+        quote) contents[$s]="\"\$(e ${contents[$((s + 3))]})\"" ;;
         *) echo "Unrecognized builtin function ${contents[$((s + 1))]}" >&2 && exit 1 ;;
         esac
         ;;
