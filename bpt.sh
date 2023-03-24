@@ -6,7 +6,8 @@
 if [[ -n $__DEFINED_BPT_SH ]]; then return; fi
 readonly __DEFINED_BPT_SH=1
 
-# Add multiple traps for EXIT (see: https://stackoverflow.com/questions/3338030)
+# Add multiple traps for EXIT
+# See https://stackoverflow.com/questions/3338030
 bpt.__add_exit_trap() {
     trap_add_cmd=${1:?${FUNCNAME[0]} usage error}
     trap -- "$(
@@ -684,7 +685,102 @@ bpt.fingerprint() {
 }
 
 bpt.print_help() {
-    :
+    echo -e "\033[1mbpt - A command-line tool for processing simple templates\033[0m"
+    echo
+    echo -e "\033[1mSYNOPSIS\033[0m"
+    echo "  bpt <command> [-l <LEFT_DELIMITER>] [-r <RIGHT_DELIMITER>] [-d] [<FILENAME>]"
+    echo
+    echo -e "\033[1mCOMMANDS\033[0m"
+    echo "  scan, s:"
+    echo "    Call the scanner (lexer)."
+    echo
+    echo "  generate, g:"
+    echo "    Generate a shell script based on the input file. Output is sent to stdout."
+    echo
+    echo "  generate-eval, ge:"
+    echo "    Same as generate, but the output is evaluated. Output is sent to stdout."
+    echo
+    echo "  collect-vars, cv:"
+    echo "    Collect variable used in the input file recursively and output them to stdout."
+    echo
+    echo "  collect-includes, ci:"
+    echo "    Collect all files included in the input file recursively and output them to stdout."
+    echo
+    echo "  fingerprint, f:"
+    echo "    Generate a unique identifier based on all factors affecting the evaluation output."
+    echo
+    echo -e "\033[1mOPTIONS\033[0m"
+    echo "  -l <LEFT_DELIMITER>, --left-delimiter <LEFT_DELIMITER>:"
+    echo "    Set the left delimiter to use for placeholders (default \`{{\`)."
+    echo
+    echo "  -r <RIGHT_DELIMITER>, --right-delimiter <RIGHT_DELIMITER>:"
+    echo "    Set the right delimiter to use for placeholders (default \`}}\`)."
+    echo
+    echo "  -d, --debug:"
+    echo "    Enable debug mode."
+    echo
+    echo "  -h, --help:"
+    echo "    Print this help."
+    echo
+    echo -e "\033[1mARGUMENTS\033[0m"
+    echo "   bpt takes an optional input file path as its argument. If no input file is specified, bpt will read from stdin."
+    echo
+    echo -e "\033[1mEXAMPLES\033[0m"
+    echo "  Generate script from a single input file using default delimiters:"
+    echo "    bpt g input.tpl > output.sh"
+    echo
+    echo "  Render the input file:"
+    echo "    var1=VAR1 var2=VAR2 ... bpt ge input.tpl"
+    echo
+    echo "  Collect variable names and values from an input file:"
+    echo "    bpt cv input.tpl"
+    echo
+    echo "  Collect include file paths from an input file:"
+    echo "    bpt ci input.tpl"
+    echo
+    echo "  Generate a fingerprint for an input"
+    echo "    var1=VAR1 var2=VAR2 ... bpt f input.tpl"
+    echo
+    echo "  Using custom delimiters:"
+    echo "    bpt -l \"<<\" -r \">>\" g input.tpl > output.sh"
+    echo
+    echo -e "\033[1mTEMPLATE GRAMMAR EXAMPLES\033[0m"
+    echo "  Variable replacements"
+    echo '    {{ var }}'
+    echo '    {{ var or "abc" }}'
+    echo '    {{ var or {{var2}} }}'
+    echo
+    echo "  Branching"
+    echo '    {{ if {{x}}: {{var1}} else : {{var2}} }}'
+    echo '    {{ if {{x}} -gt "5": {{var1}} elif: {{var2}} else: {{var3}} }}'
+    echo '    {{ if ({{var1}} > "abc" and {{var2}} < "def") or {{var3}} == "hello" : {{ include : "input2.tpl" }} }}'
+    echo
+    echo "    Available operators are: "
+    echo "      compare numbers:   -ne, -eq, -gt, -lt, -ge, -le "
+    echo "      compare strings:   >, <, ==, !="
+    echo "      logical operators: and, or, !"
+    echo "      grouping:          ()"
+    echo
+    echo "  Looping"
+    echo '    {{ for {{i}} in "a" "b" "c": "abc"{{i}}"def" }}'
+    echo '    {{ for {{i}} in {{seq: "5"}}: "abc"{{i}}"def" }}'
+    echo
+    echo "  Include another template"
+    echo '    {{ include : "input2.tpl" }}'
+    echo
+    echo "  Builtin functions"
+    echo '    {{ seq: "5" }}'
+    echo '    {{ len: "abc" }}'
+    echo '    {{ quote: {{seq: "1" "2" "5"}} }}'
+    echo
+    echo "  Note: bpt doesn't distinguish between strings and numbers."
+    echo "    All non-keywords should be treated as strings."
+    echo "    All strings inside {{...}} need to be quoted. e.g. 'abc', \"abc\", '123'."
+    echo
+    echo -e "\033[1mCOPYRIGHT\033[0m"
+    echo "  MIT License."
+    echo "  Copyright (c) 2023 Hu Sixu."
+    echo "  https://github.com/husixu1/bpt"
 }
 
 bpt.main() (
@@ -728,6 +824,10 @@ bpt.main() (
     fingerprint | f)
         cmd=fingerprint
         ;;
+    -h | --help | '')
+        bpt.print_help
+        exit 0
+        ;;
     *)
         echo "Unrecognized command '$1'" >&2
         bpt.print_help
@@ -742,6 +842,10 @@ bpt.main() (
         -l | --left-delimiter) shift && ld="$1" ;;
         -r | --right-delimiter) shift && rd="$1" ;;
         -d | --debug) debug=1 ;;
+        -h | --help)
+            bpt.print_help
+            exit 0
+            ;;
         *)
             [[ -z $infile ]] || {
                 echo "Error: Option '$1' not recognized." >&2
