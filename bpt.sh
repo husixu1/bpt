@@ -675,6 +675,10 @@ bpt.fingerprint() {
     done
     # Digest and check for missing vars
     for var in "${vars[@]}"; do
+        if [[ -z ${!var+.} ]]; then
+            echo "Error: variable '$var' is required but not set" >&2
+            return 1
+        fi
         md5=($(echo -n "${var}${!var}" | md5sum)) && fingerprint+=":V:${md5[0]}"
     done
 
