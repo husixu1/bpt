@@ -380,48 +380,32 @@ bpt.__test_delims() {
 # The reduce function to collect all variables
 # shellcheck disable=SC2031 # Direct access of `rule` and `contents` for speed.
 bpt.__reduce_collect_vars() {
+    # For all `id` token, allow only the path via the VAR rule.
+    # For all `str` token, allow only the path to the INCLUDE rule.
     case "${rule[0]}" in
-    UOP | BOP) contents[$s]='' ;;
+    ID | STR) ;;
+    STMT) [[ "${rule[1]}" != STR ]] || contents[$s]='' ;;
     VAR)
         contents[$s]="${contents[$((s + 1))]}"$'\n'
-        [[ ${#rule[@]} -eq 4 || ${rule[4]} != VAR ]] || contents[$s]+="${contents[$((s + 3))]}"
+        [[ ${#rule[@]} -eq 4 || ${rule[4]} != VAR ]] ||
+            contents[$s]+="${contents[$((s + 3))]}"
         ;;
     BUILTIN) contents[$s]="${contents[$((s + 3))]}" ;;
     INCLUDE) contents[$s]="$(__recursive_process "${contents[$((s + 3))]}")"$'\n' ;;
-    FORIN)
+    FORIN) # Filter tokens defined by the FORIN rule
         contents[$s]="${contents[$((s + 4))]}"
         local var
         while read -r var; do
             [[ -z $var || $var == "${contents[$((s + 2))]}" ]] || contents[$s]+="$var"$'\n'
         done <<<"${contents[$((s + 6))]}"
         ;;
-    BOOL) [[ "${#rule[@]}" -eq 2 ]] || contents[$s]+="${contents[$((s + 2))]}" ;;
-    BOOLA)
-        case "${#rule[@]}" in
-        4) case "${rule[1]}" in
-            lp) contents[$s]="${contents[$((s + 1))]}" ;;
-            BOOLA) contents[$s]+="${contents[$((s + 2))]}" ;;
-            esac ;;
-        6) contents[$s]+="${contents[$((s + 3))]}" ;;
-        esac
-        ;;
-    BOOLO) [[ "${#rule[@]}" -eq 2 ]] || contents[$s]+="${contents[$((s + 2))]}" ;;
-    BOOLS) [[ "${#rule[@]}" -eq 2 ]] || contents[$s]="${contents[$((s + 1))]}" ;;
-    ELSE)
+    *) # Prevent the propagation of all other non-terminals
         [[ "${#rule[@]}" -ne 1 ]] || { contents[$s]='' && return; }
-        contents[$s]="${contents[$((s + 2))]}"
-        ;;
-    ELIF)
-        [[ "${#rule[@]}" -ne 1 ]] || { contents[$s]='' && return; }
-        contents[$s]="${contents[$((s + 2))]}${contents[$((s + 4))]}"
-        ;;
-    IF) contents[$s]="${contents[$((s + 2))]}${contents[$((s + 4))]}${contents[$((s + 5))]}${contents[$((s + 6))]}" ;;
-    STMT) [[ "${rule[1]}" != STR ]] || contents[$s]='' ;;
-    *)
-        [[ "${#rule[@]}" -ne 1 ]] || { contents[$s]='' && return; }
+        [[ "${rule[1]^^}" == "${rule[1]}" ]] || contents[$s]=''
         local i=1
-        for (( ; i < ${#rule[@]} - 1; ++i)); do
-            contents[$s]+="${contents[$((s + i))]}"
+        for (( ; i < ${#rule[@]}; ++i)); do
+            [[ "${rule[i + 1],,}" == "${rule[i + 1]}" ]] ||
+                contents[$s]+="${contents[$((s + i))]}"
         done
         ;;
     esac
@@ -430,17 +414,22 @@ bpt.__reduce_collect_vars() {
 # The reduce function to collect all includes
 # shellcheck disable=SC2031
 bpt.__reduce_collect_includes() {
+    # For all `str` token, allow only the path via the INCLUDE rule.
     case "${rule[0]}" in
+    STR) ;; # Allow the propagation of str
+    STMT) [[ "${rule[1]}" != STR ]] || contents[$s]='' ;;
+    VAR) contents[$s]='' ;;
     INCLUDE)
         contents[$s]="${contents[$((s + 3))]}"$'\n'
         contents[$s]+="$(__recursive_process "${contents[$((s + 3))]}")"
         ;;
-    STMT) [[ "${rule[1]}" == INCLUDE ]] || contents[$s]='' ;;
-    *)
+    *) # Prevent the propagation of all other non-terminals
         [[ "${#rule[@]}" -ne 1 ]] || { contents[$s]='' && return; }
+        [[ "${rule[1]^^}" == "${rule[1]}" ]] || contents[$s]=''
         local i=1
-        for (( ; i < ${#rule[@]} - 1; ++i)); do
-            contents[$s]+="${contents[$((s + i))]}"
+        for (( ; i < ${#rule[@]}; ++i)); do
+            [[ "${rule[i + 1],,}" == "${rule[i + 1]}" ]] ||
+                contents[$s]+="${contents[$((s + i))]}"
         done
         ;;
     esac
