@@ -1065,6 +1065,7 @@ bpt.main() {
 #!/bin/bash
 e(){ local OIFS="$IFS"; IFS=; echo -n "$*"; IFS="$OIFS"; };
 len(){ echo -n "${#1}"; };
+seq(){ command seq -s ' ' -- "$@"; };
 EOF
     }
 
