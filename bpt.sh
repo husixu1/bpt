@@ -3,8 +3,8 @@
 # shellcheck disable=SC2317
 
 # Import once
-if [[ -n $__DEFINED_BPT_SH ]]; then return; fi
-readonly __DEFINED_BPT_SH=1
+if [[ -n $__BPT_VERSION ]]; then return; fi
+readonly __BPT_VERSION="v0.1"
 
 # Add multiple traps for EXIT
 # See https://stackoverflow.com/questions/3338030
@@ -722,6 +722,12 @@ bpt.print_help() {
     echo "  fingerprint, f:"
     echo "    Generate a unique identifier based on all factors affecting the evaluation output."
     echo
+    echo "  -h, --help:"
+    echo "    Print this help."
+    echo
+    echo "  -v, --version:"
+    echo "    Print version number."
+    echo
     echo -e "\033[1mOPTIONS\033[0m"
     echo "  -l <LEFT_DELIMITER>, --left-delimiter <LEFT_DELIMITER>:"
     echo "    Set the left delimiter to use for placeholders (default \`{{\`)."
@@ -731,9 +737,6 @@ bpt.print_help() {
     echo
     echo "  -d, --debug:"
     echo "    Enable debug mode."
-    echo
-    echo "  -h, --help:"
-    echo "    Print this help."
     echo
     echo -e "\033[1mARGUMENTS\033[0m"
     echo "   bpt takes an optional input file path as its argument. If no input file is specified, bpt will read from stdin."
@@ -837,10 +840,8 @@ bpt.main() (
     fingerprint | f)
         cmd=fingerprint
         ;;
-    -h | --help | '')
-        bpt.print_help
-        exit 0
-        ;;
+    -v | --version) echo "$__BPT_VERSION" && exit 0 ;;
+    -h | --help | '') bpt.print_help && exit 0 ;;
     *)
         echo "Unrecognized command '$1'" >&2
         bpt.print_help
