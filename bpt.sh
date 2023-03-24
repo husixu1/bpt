@@ -687,7 +687,16 @@ bpt.print_help() {
     :
 }
 
-bpt.main() {
+bpt.main() (
+    # Clean the environment to avoid builtin overrides
+    # See https://unix.stackexchange.com/questions/188327
+    POSIXLY_CORRECT=1
+    \unset -f help read unset
+    \unset POSIXLY_CORRECT
+    while \read -r cmd; do
+        [[ "$cmd" =~ ^([a-z:.\[]+): ]] && \unset -f "${BASH_REMATCH[1]}"
+    done < <(\help -s "*")
+
     local ld='{{' rd='}}'
     local infile=''
     local cmd='' reduce_fn=bpt.__reduce_generate post_process=eval
@@ -1076,6 +1085,6 @@ EOF
     *) result="$(bpt.process "$ld" "$rd" "$reduce_fn" "$infile" "$debug")" &&
         $post_process "$HEADER$result" ;;
     esac
-}
+)
 
 (return 0 2>/dev/null) || bpt.main "$@"
