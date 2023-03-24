@@ -240,7 +240,7 @@ bpt.scan() (
 
     # Tokenizer
     local line='' content=''
-    while IFS= read -r line; do
+    while IFS= read -r line || [[ $line ]]; do
         # Decide whether currently scanning a string
         # Only count newlines in strings (outside `ld ... rd` and inside quotes).
         [[ $num_ld -gt 0 && -z "$quote" ]] || {
