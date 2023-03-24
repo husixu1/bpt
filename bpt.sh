@@ -611,7 +611,7 @@ bpt.process() (
         # Detect recursive includes
         for file in "${file_stack[@]}"; do
             [[ $file -ef $1 ]] && {
-                printf "Error: recursive include detected:\n"
+                printf "Error: cyclic include detected:\n"
                 printf '  In: %s\n' "${file_stack[0]}"
                 printf '  --> %s\n' "${file_stack[@]:1}"
                 printf '  --> %s\n' "${file}"
