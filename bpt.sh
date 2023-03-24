@@ -389,7 +389,7 @@ bpt.__reduce_collect_vars() {
     BUILTIN) contents[$s]="${contents[$((s + 3))]}" ;;
     INCLUDE) contents[$s]="$(__recursive_process "${contents[$((s + 3))]}")"$'\n' ;;
     FORIN)
-        contents[$s]=''
+        contents[$s]="${contents[$((s + 4))]}"
         local var
         while read -r var; do
             [[ -z $var || $var == "${contents[$((s + 2))]}" ]] || contents[$s]+="$var"$'\n'
