@@ -667,8 +667,13 @@ bpt.fingerprint() {
 
     # Collect vars and includes
     local -a vars=() incs=()
-    mapfile -t vars < <(bpt.__dedup "$(bpt.process "$ld" "$rd" bpt.__reduce_collect_vars "$infile" "$debug")")
-    mapfile -t incs < <(bpt.__dedup "$(bpt.process "$ld" "$rd" bpt.__reduce_collect_includes "$infile" "$debug")")
+    local var_list inc_list
+    var_list="$(bpt.process "$ld" "$rd" bpt.__reduce_collect_vars "$infile" "$debug")" || exit 1
+    var_list="$(bpt.__dedup "$var_list")"
+    [[ -z $var_list ]] || mapfile -t vars <<<"$var_list"
+    inc_list="$(bpt.process "$ld" "$rd" bpt.__reduce_collect_includes "$infile" "$debug")" || exit 1
+    inc_list="$(bpt.__dedup "$inc_list")"
+    [[ -z $inc_list ]] || mapfile -t incs <<<"$inc_list"
     local fingerprint=''
     local -a md5=()
 
@@ -1201,7 +1206,7 @@ bpt.main() (
     # <<< BPT_PARSE_TABLE_E <<<
 
     # Deduplication function for collect-{var,include}
-    bpt.__dedup() { echo "$1" | sort | uniq; }
+    bpt.__dedup() { echo -n "$1" | sort | uniq; }
 
     # Append this if reducer is bpt.__reduce_generate
     local HEADER=''

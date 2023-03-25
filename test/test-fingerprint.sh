@@ -33,10 +33,16 @@ teardown_suite() {
 
 # Helper function
 fp() { bpt.main f "$1"; }
+fpi() { bpt.main f <<<"$1"; }
 
 # Tests =======================================================================
 test_fingerprint() {
     local var0 var1 var2 fp1 fp2
+
+    # Fingerprint a regular template
+    assert_fail 'fpi "{{abc}}"'
+    assert 'abc= fpi "{{abc}}"'
+    assert 'abc=1 fpi "{{abc}}"'
 
     # different vars
     var0=0 var1=0 var2=0

@@ -45,9 +45,8 @@ cif() { bpt.main ci "$1"; }
 
 # Tests =======================================================================
 test_collect_vars() {
-    assert_equals '' "$(cv 'abcdef')"
+    assert_equals '.' "$(cv 'abcdef'; echo .)"
     assert_equals 'var1'$'\n''var2' "$(cv 'abc{{var1}}def{{var2}}ghi')"
-
 }
 
 test_collect_vars_nested() {
@@ -106,6 +105,7 @@ test_collect_vars_recursive() {
 }
 
 test_collect_includes() {
+    assert_equals "." "$(ci "abc"; echo .)"
     assert_equals "$tmp_dir/i02.tpl" "$(ci "{{include: \"$tmp_dir/i02.tpl\"}}")"
     assert_equals "$(printf '%s\n' "$tmp_dir/i"{01..10}".tpl")" "$(ci "
         {{include: \"$tmp_dir/i10.tpl\"}}
