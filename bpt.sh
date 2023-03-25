@@ -441,12 +441,14 @@ bpt.__reduce_generate() {
     case "${rule[0]}" in
     # Note: Since `contents[$s]` is exactly the first RHS, the
     #   `${contents[$s]}="${contents[$s]}"` assignment is unnecessary here.
-    STR | ID | UOP | BOP) ;;
+    STR | UOP | BOP) ;;
+    # Tag location for BUILTIN error reporting
+    ID) contents[$s]+=":$num_lines:$num_bytes" ;;
     VAR)
         case "${rule[3]}" in
-        rd) contents[$s]="\${${contents[$((s + 1))]}}" ;;
-        or) contents[$s]="\${${contents[$((s + 1))]}:-\$(e " ;;&
-        and) contents[$s]="\${${contents[$((s + 1))]}:+\$(e " ;;&
+        rd) contents[$s]="\${${contents[$((s + 1))]%:*:*}}" ;;
+        or) contents[$s]="\${${contents[$((s + 1))]%:*:*}:-\$(e " ;;&
+        and) contents[$s]="\${${contents[$((s + 1))]%:*:*}:+\$(e " ;;&
         *) case "${rule[4]}" in
             VAR) contents[$s]+="\"${contents[$((s + 3))]}\")}" ;;
             STR) contents[$s]+="${contents[$((s + 3))]@Q})}" ;;
@@ -477,14 +479,22 @@ bpt.__reduce_generate() {
         ;;
     BUILTIN)
         # Filter allowed builtints
-        case "${contents[$((s + 1))]}" in
-        len | seq) contents[$s]="\$(${contents[$((s + 1))]} ${contents[$((s + 3))]})" ;;
+        local builtin_name=${contents[$((s + 1))]%:*:*}
+        case "$builtin_name" in
+        len | seq) contents[$s]="\$($builtin_name ${contents[$((s + 3))]})" ;;
         quote) contents[$s]="\"\$(e ${contents[$((s + 3))]})\"" ;;
-        *) echo "Unrecognized builtin function ${contents[$((s + 1))]}" >&2 && exit 1 ;;
+        *) # Extract and compute correct error location from ID
+            local line_col="${contents[$((s + 1))]#"$builtin_name"}"
+            local err_line=${line_col%:*} && err_line="${err_line:1}"
+            local err_byte=$((${line_col##*:} - ${#builtin_name}))
+            $error_fn "$err_line" "$err_byte" \
+                "Error Unrecognized builtin function $builtin_name" >&2
+            exit 1
+            ;;
         esac
         ;;
     INCLUDE) contents[$s]="$(__recursive_process "${contents[$((s + 3))]}")" ;;
-    FORIN) contents[$s]="for ${contents[$((s + 2))]} in ${contents[$((s + 4))]}; do ${contents[$((s + 6))]} done" ;;
+    FORIN) contents[$s]="for ${contents[$((s + 2))]%:*:*} in ${contents[$((s + 4))]}; do ${contents[$((s + 6))]} done" ;;
     BOOL)
         case "${#rule[@]}" in
         2) contents[$s]="\"\$(e ${contents[$s]})\"" ;;
