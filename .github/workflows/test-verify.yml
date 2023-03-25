@@ -1,0 +1,26 @@
+name: Test bpt
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Install dependencies
+        run: |
+          curl -k -sSL https://raw.githubusercontent.com/pgrange/bash_unit/v2.1.0/install.sh | bash
+          [[ $(sha256sum bash_unit | cut -d " " -f1) == dfb4d50cef03f4d49f083d4945352793499cd5ba1e2cc2482d6f80d510d20374 ]] || exit 1
+          curl -k -sSL https://github.com/mvdan/sh/releases/download/v3.6.0/shfmt_v3.6.0_linux_amd64 -o shfmt
+          [[ $(sha256sum shfmt | cut -d " " -f1) == 5741a02a641de7e56b8da170e71a97e58050d66a3cf485fb268d6a5a8bb74afb ]] || exit 1
+          chmod +x shfmt
+
+      - name: Run Tests
+        run: ./bash_unit -f tap test/test-*
+
+      - name: Check script formatting
+        run: ./shfmt -d -i 4 bpt.sh
+

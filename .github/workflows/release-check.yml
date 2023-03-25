@@ -1,0 +1,21 @@
+name: Release checks
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  myjob:
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/master'
+    steps:
+      - name: Verify version number
+        run: |
+          TAG="$(git describe --abbrev=0 --tags)"
+          VERSION="$(./bpt.sh -v)"
+          if [[ "$TAG" != "$VERSION" ]]; then
+            echo "ERROR: Version mismatch between Git tag ($TAG) and bpt ($VERSION)"
+            exit 1
+          fi
+
