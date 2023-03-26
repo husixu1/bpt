@@ -3,8 +3,8 @@
 # shellcheck disable=SC2317
 
 # Import once
-if [[ -n $__BPT_VERSION ]]; then return; fi
-readonly __BPT_VERSION="v0.1"
+[[ -z $__BPT_VERSION ]] || return
+readonly __BPT_VERSION="v0.2"
 
 # The shift-reduce LR(1) parser.
 # $1: Parse table name.
@@ -24,7 +24,7 @@ readonly __BPT_VERSION="v0.1"
 bpt.__lr_parse() (
     local -rn table="$1"
     local -r reduce_fn="${2:-echo}"
-    local -r error_fn="${3:-__error}"
+    local -r error_fn="${3:-bpt.__error}"
     if [[ -n $4 ]]; then local -r NDEBUG=false; else local -r NDEBUG=true; fi
 
     # 20 should be enough ...
@@ -50,7 +50,7 @@ bpt.__lr_parse() (
     local i=0 str_lines=0 buffer=''
 
     # $1: Goto state after shift
-    __shift() {
+    bpt.__shift() {
         states+=":$1"
         contents["$stack_size"]="$content"
         ((++stack_size))
@@ -58,7 +58,7 @@ bpt.__lr_parse() (
     }
 
     # $1: Rule
-    __reduce() {
+    bpt.__reduce() {
         # Although not robust, word splitting is faster than `read`
         # shellcheck disable=SC2206
         local num_rhs=$((${#rule[@]} - 1))
@@ -77,32 +77,32 @@ bpt.__lr_parse() (
     }
 
     # Simply print the result
-    __accept() {
+    bpt.__accept() {
         printf '%s' "${contents[1]}"
     }
 
     # Default error handler
-    __error() {
+    bpt.__error() {
         echo "Error: Line $(($1 + 1)) Column $(($2 + 1))"
         echo "$3"
     } >&2
 
     # Debugging support
     $NDEBUG || {
-        eval __orig"$(declare -f __shift)"
-        eval __orig"$(declare -f __reduce)"
-        eval __orig"$(declare -f __accept)"
-        __shift() {
+        eval __orig_"$(declare -f bpt.__shift)"
+        eval __orig_"$(declare -f bpt.__reduce)"
+        eval __orig_"$(declare -f bpt.__accept)"
+        bpt.__shift() {
             echo "[DBG] ${states##*:} Shift $1 \`$content\`" >&2
-            __orig__shift "$@"
+            __orig_bpt.__shift "$@"
         }
-        __reduce() {
+        bpt.__reduce() {
             echo "[DBG] ${states##*:} Reduce ${rule[*]}" >&2
-            __orig__reduce
+            __orig_bpt.__reduce
         }
-        __accept() {
+        bpt.__accept() {
             $NDEBUG || echo "[DBG] Result accepted" >&2
-            __orig__accept
+            __orig_bpt.__accept
         }
     }
 
@@ -120,14 +120,14 @@ bpt.__lr_parse() (
         action="${table["${states##*:},$token"]}"
         case "$action" in
         # Shift
-        s*) __shift "${action#s }" ;;
+        s*) bpt.__shift "${action#s }" ;;
         # Reduce
         r*) # shellcheck disable=SC2206
             rule=(${action#r })
-            __reduce
+            bpt.__reduce
             ;;
         # Accept
-        a) __accept && break ;;
+        a) bpt.__accept && break ;;
         # Error
         '')
             local expects='' rule_key=''
@@ -138,13 +138,13 @@ bpt.__lr_parse() (
                     expects+="${expects:+,}${BPT_PP_TOKEN_TABLE["${rule_key##*,}"]:-${rule_key##*,}}"
             done
             $error_fn "$num_lines" "$num_bytes" \
-                "Expects one of \`${expects[*]}\` but got \`${token}\` ($content)."
+                "Expecting \`${expects[*]}\` but got \`${token}\` ($content)."
             $NDEBUG || echo "[DBG] PARSER STATES ${states} TOKEN ${token} CONTENT ${content}." >&2
             exit 1
             ;;
         *) # Parse table error (internal error)
             echo "Internal error: STATES ${states} TOKEN ${token} CONTENT ${content}. " >&2
-            echo "Internal error: action '$action' not recognized." >&2
+            echo "Internal error: Action '$action' not recognized." >&2
             exit 1
             ;;
         esac
@@ -172,12 +172,14 @@ bpt.__lr_parse() (
 #   streq: ==       strne: !=           strlt: <        strgt: >
 #   and|or|if|elif|else|for|in|include: <as is>
 #   id: [[:alpha:]_][[:alnum:]_]*
+#
+# shellcheck disable=SC2030
 bpt.scan() (
-    local -r ld="$1" rd="$2" error_fn="${3:-__error}"
+    local -r ld="$1" rd="$2" error_fn="${3:-bpt.__scan_error}"
     bpt.__test_delims "$ld" "$rd" || return 1
 
     # Default error handler
-    __error() {
+    bpt.__scan_error() {
         echo "Error: Line $(($1 + 1)) Column $(($2 + 1))"
         echo "$3"
     } >&2
@@ -214,13 +216,13 @@ bpt.scan() (
     # `str_lines=''` means currently outside the scope of string
     local string='' str_lines='' str_bytes=''
     # Start scannign string
-    __start_string() {
+    bpt.__start_string() {
         str_lines="${str_lines:-1}"
         str_bytes="${str_bytes:-$num_bytes}"
     }
     # Commit (possibly multiline) string buffer
     # shellcheck disable=SC2031
-    __commit_string() {
+    bpt.__commit_string() {
         ((str_lines > 0)) || return
         echo "str $str_lines $((num_lines + 1 - str_lines)) $str_bytes"
         # `$content` can be a literal `-ne`. Thus printf is needed.
@@ -230,7 +232,7 @@ bpt.scan() (
 
     # Tokenizer
     local line='' content='' newline=true
-    __start_string
+    bpt.__start_string
     while IFS= read -r line || { newline=false && false; } || [[ $line ]]; do
         # Scan the line
         while [[ -n "$line" ]]; do
@@ -239,7 +241,7 @@ bpt.scan() (
                 # Outside `ld ... rd`
                 if [[ $line =~ ^(${e_ld}) ]]; then
                     # If met `ld`, enter `ld ... rd`
-                    __commit_string
+                    bpt.__commit_string
                     ((++num_ld))
                     content="${BASH_REMATCH[1]}"
                     echo "ld 1 $num_lines $num_bytes"
@@ -267,14 +269,14 @@ bpt.scan() (
                     content+="${line_copy%%"${quote}"*}${quote}"
                     string+="${line_copy%%"${quote}"*}"
                     quote=''
-                    __commit_string
+                    bpt.__commit_string
                 else
                     content="$line_copy"
                     string+="$line_copy"
                 fi
             else
                 # Non-strings. Commit string first.
-                __commit_string
+                bpt.__commit_string
                 if [[ $line =~ ^(${KW_RE}) ||
                     $line =~ ^(${SKW_RE})($|[^[:alnum:]_]) ]]; then
                     # Inside `ld ... rd` and matches a keyword at front
@@ -291,7 +293,7 @@ bpt.scan() (
                     for | in | include) echo -n "$content" ;;
                     '"' | "'")
                         quote="$content"
-                        __start_string
+                        bpt.__start_string
                         ;;
                     "$ld")
                         ((++num_ld))
@@ -302,7 +304,7 @@ bpt.scan() (
                             $error_fn "$num_lines" "$num_bytes" "Extra '$rd'."
                             return 1
                         }
-                        ((num_ld != 0)) || __start_string
+                        ((num_ld != 0)) || bpt.__start_string
                         echo -n rd
                         ;;
                     *)
@@ -317,23 +319,24 @@ bpt.scan() (
                     }
                 else # Inside `ld ... rd` but outside quotes
                     # Ignore spaces inside `ld ... rd`
-                    [[ $line =~ ^([[:space:]]+)(.*) ]] && {
+                    [[ ! $line =~ ^([[:space:]]+)(.*) ]] || {
                         line="${BASH_REMATCH[2]}"
                         ((num_bytes += ${#BASH_REMATCH[1]}))
                         continue
                     }
                     content="$line"
 
-                    # Contents are either keywords or identifiers
-                    if [[ $content =~ (${KW_RE}) ||
-                        $content =~ (${SKW_RE})($|[^[:alnum:]_]?) ]]; then
+                    # Strip possible keywords suffixing variable names
+                    ! [[ $content =~ (${KW_RE}) ||
+                        $content =~ (${SKW_RE})($|[^[:alnum:]_]?) ]] ||
                         content="${content%%"${BASH_REMATCH[1]}"*}"
-                    fi
-                    if [[ ! $content =~ ^(${ID_RE}) ]]; then
+
+                    # Contents must be keywords
+                    [[ $content =~ ^(${ID_RE}) ]] || {
                         $error_fn "$num_lines" "$num_bytes" \
                             "'$content' is not a valid identifier"
                         return 1
-                    fi
+                    }
                     content="${BASH_REMATCH[1]}"
                     echo "id 1 $num_lines $num_bytes"
                     printf '%s\n' "$content"
@@ -350,13 +353,13 @@ bpt.scan() (
         # Decide whether currently scanning a string
         # Only count newlines in strings (outside `ld ... rd` and inside quotes).
         [[ $num_ld -gt 0 && -z "$quote" ]] || {
-            __start_string
+            bpt.__start_string
             ! $newline || { string+=$'\n' && ((++str_lines)); }
         }
 
         newline=true
     done
-    __commit_string
+    bpt.__commit_string
     echo "$ 1 $num_lines 0" # The EOF token
     echo ''                 # The EOF content (empty)
 )
@@ -386,7 +389,7 @@ bpt.__reduce_collect_vars() {
             contents[$s]+="${contents[$((s + 3))]}"
         ;;
     BUILTIN) contents[$s]="${contents[$((s + 3))]}" ;;
-    INCLUDE) contents[$s]="$(__recursive_process "${contents[$((s + 3))]}")"$'\n' ;;
+    INCLUDE) contents[$s]="$(bpt.__recursive_process "${contents[$((s + 3))]}")"$'\n' ;;
     FORIN) # Filter tokens defined by the FORIN rule
         contents[$s]="${contents[$((s + 4))]}"
         local var
@@ -416,7 +419,7 @@ bpt.__reduce_collect_includes() {
     VAR) contents[$s]='' ;;
     INCLUDE)
         contents[$s]="${contents[$((s + 3))]}"$'\n'
-        contents[$s]+="$(__recursive_process "${contents[$((s + 3))]}")"
+        contents[$s]+="$(bpt.__recursive_process "${contents[$((s + 3))]}")"
         ;;
     *) # Prevent the propagation of all other non-terminals
         [[ "${#rule[@]}" -ne 1 ]] || { contents[$s]='' && return; }
@@ -488,7 +491,7 @@ bpt.__reduce_generate() {
             ;;
         esac
         ;;
-    INCLUDE) contents[$s]="$(__recursive_process "${contents[$((s + 3))]}")" ;;
+    INCLUDE) contents[$s]="$(bpt.__recursive_process "${contents[$((s + 3))]}")" ;;
     FORIN) contents[$s]="for ${contents[$((s + 2))]%:*:*} in ${contents[$((s + 4))]}; do ${contents[$((s + 6))]} done" ;;
     BOOL)
         case "${#rule[@]}" in
@@ -623,7 +626,7 @@ bpt.process() (
     file_stack+=("$file")
 
     # Curry this function so that it can be called by the reducer recursively
-    __recursive_process() {
+    bpt.__recursive_process() {
         local file
         # Detect recursive includes
         for file in "${file_stack[@]}"; do
@@ -639,7 +642,7 @@ bpt.process() (
     }
 
     # Pretty-print parse errors
-    __error_handler() {
+    bpt.__error_handler() {
         echo "Error: File '$file' Line $(($1 + 1)) Column $(($2 + 1))"
         echo "$3"
         echo
@@ -651,8 +654,8 @@ bpt.process() (
     } >&2
 
     # Prase with the provided reduce function
-    bpt.__lr_parse __BPT_PARSE_TABLE "$reduce_fn" __error_handler "$debug" \
-        < <(bpt.scan "$ld" "$rd" __error_handler <"$file")
+    bpt.__lr_parse __BPT_PARSE_TABLE "$reduce_fn" bpt.__error_handler "$debug" \
+        < <(bpt.scan "$ld" "$rd" bpt.__error_handler <"$file")
 )
 
 # $1: Left deilmiter
@@ -687,10 +690,10 @@ bpt.fingerprint() {
     done
     # Digest and check for missing vars
     for var in "${vars[@]}"; do
-        if [[ -z ${!var+.} ]]; then
+        [[ ${!var+.} ]] || {
             echo "Error: variable '$var' is required but not set" >&2
             return 1
-        fi
+        }
         md5=($(echo -n "${var}${!var}" | md5sum)) && fingerprint+=":V:${md5[0]}"
     done
 
@@ -780,7 +783,7 @@ bpt.print_help() {
     echo "      logical operators: and, or, !"
     echo "      grouping:          ()"
     echo
-    echo "  Looping"
+    echo "  Iterate a list"
     echo '    {{ for {{i}} in "a" "b" "c": "abc"{{i}}"def" }}'
     echo '    {{ for {{i}} in {{seq: "5"}}: "abc"{{i}}"def" }}'
     echo
