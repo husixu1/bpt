@@ -481,7 +481,7 @@ bpt.__reduce_generate() {
         # Filter allowed builtints
         local builtin_name=${contents[$((s + 1))]%:*:*}
         case "$builtin_name" in
-        len | seq) contents[$s]="\$($builtin_name ${contents[$((s + 3))]})" ;;
+        len | seq | split) contents[$s]="\$($builtin_name ${contents[$((s + 3))]})" ;;
         quote) contents[$s]="\"\$(e ${contents[$((s + 3))]})\"" ;;
         *) # Extract and compute correct error location from ID
             local line_col="${contents[$((s + 1))]#"$builtin_name"}"
@@ -793,6 +793,7 @@ bpt.print_help() {
     echo '    {{ seq: "5" }}'
     echo '    {{ len: "abc" }}'
     echo '    {{ quote: {{seq: "1" "2" "5"}} }}'
+    echo '    {{ split: "1 2 3" }}'
     echo
     echo "  Note: bpt doesn't distinguish between strings and numbers."
     echo "    All non-keywords should be treated as strings."
@@ -1216,7 +1217,9 @@ bpt.main() (
 e(){ local OIFS="$IFS"; IFS=; echo -n "$*"; IFS="$OIFS"; };
 len(){ echo -n "${#1}"; };
 seq(){ command seq -s ' ' -- "$@"; };
+split(){ echo -n "$*"; };
 EOF
+        HEADER+=$'\n'
     }
 
     # Execute command

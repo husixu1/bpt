@@ -232,7 +232,10 @@ test_forin() {
 test_builtin() {
     assert_equals $'1 2 3' "$(gen '{{seq: "3"}}')"
     assert_equals '3' "$(gen '{{len: "abc"}}')"
+    assert_equals '1.2.3.' "$(gen '{{for i in "1" "2" "3": {{i}}"."}}')"
     assert_equals '123.' "$(gen '{{for i in {{quote: "1" "2" "3"}}: {{i}}"."}}')"
+    assert_equals '1 2 3.' "$(gen '{{for i in "1 2 3": {{i}}"."}}')"
+    assert_equals '1.2.3.' "$(gen '{{for i in {{split: "1 2 3"}}: {{i}}"."}}')"
     assert_equals '{{' "$(gen '{{quote: "{{"}}')"
 }
 
