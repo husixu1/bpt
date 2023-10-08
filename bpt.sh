@@ -6,17 +6,6 @@
 if [[ -n $__BPT_VERSION ]]; then return; fi
 readonly __BPT_VERSION="v0.1"
 
-# Add multiple traps for EXIT
-# See https://stackoverflow.com/questions/3338030
-bpt.__add_exit_trap() {
-    trap_add_cmd=${1:?${FUNCNAME[0]} usage error}
-    trap -- "$(
-        extract_trap_cmd() { printf '%s\n' "$3"; }
-        eval "extract_trap_cmd $(trap -p EXIT)"
-        printf '%s\n' "${trap_add_cmd}"
-    )" EXIT || echo "Unable to add to trap" >&2
-}
-
 # The shift-reduce LR(1) parser.
 # $1: Parse table name.
 #   The parse table should be an associative array where the key is
@@ -881,7 +870,8 @@ bpt.main() (
     # If file not provided, read into a temporary file and use that file.
     [[ -n $infile ]] || {
         infile="$(mktemp)" || { echo "Error: mktemp failed." >&2 && exit 1; }
-        bpt.__add_exit_trap "rm -f \"${infile:?}\""
+        # shellcheck disable=SC2064
+        trap "rm -f -- \"${infile:?}\"; trap - RETURN" RETURN
         cat >"${infile:?}"
     }
 
