@@ -1206,7 +1206,7 @@ bpt.main() (
 #!/bin/bash
 e(){ local OIFS="$IFS"; IFS=; echo -n "$*"; IFS="$OIFS"; };
 len(){ echo -n "${#1}"; };
-seq(){ command seq -s ' ' -- "$@"; };
+seq(){ command seq -s ' ' -- "$@" || kill $__BPT_BASHPID; };
 split(){ echo -n "$*"; };
 EOF
         HEADER+=$'\n'
@@ -1217,7 +1217,7 @@ EOF
     scan) bpt.scan "$ld" "$rd" <"$infile" ;;
     fingerprint) bpt.fingerprint "$ld" "$rd" "$infile" "$debug" ;;
     *) result="$(bpt.process "$ld" "$rd" "$reduce_fn" "$infile" "$debug")" &&
-        $post_process "$HEADER$result" ;;
+        (__BPT_BASHPID=$BASHPID && $post_process "$HEADER$result" || return $?) ;;
     esac
 )
 

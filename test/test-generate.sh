@@ -332,6 +332,8 @@ test_illegal_forin() {
 test_illegal_builtin() {
     assert_fail "gen '"'{{asdf: }}'"'"
     assert_fail "gen '"'{{asdf: "asdf"}}'"'"
+    assert_fail "gen '"'{{seq: "asdf"}}'"'"
+    assert_fail "gen '"'{{seq: "2" "asdf"}}'"'"
 }
 
 test_illegal_include() {
