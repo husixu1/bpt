@@ -1221,4 +1221,4 @@ EOF
     esac
 )
 
-(return 0 2>/dev/null) || bpt.main "$@"
+return 0 2>/dev/null || bpt.main "$@"
