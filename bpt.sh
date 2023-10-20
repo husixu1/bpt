@@ -228,15 +228,9 @@ bpt.scan() (
     }
 
     # Tokenizer
-    local line='' content=''
-    while IFS= read -r line || [[ $line ]]; do
-        # Decide whether currently scanning a string
-        # Only count newlines in strings (outside `ld ... rd` and inside quotes).
-        [[ $num_ld -gt 0 && -z "$quote" ]] || {
-            __start_string
-            [[ $num_lines -eq 0 ]] || { string+=$'\n' && ((++str_lines)); }
-        }
-
+    local line='' content='' newline=true
+    __start_string
+    while IFS= read -r line || { newline=false && false; } || [[ $line ]]; do
         # Scan the line
         while [[ -n "$line" ]]; do
             content='' # The consumed content (to be removed from `line`)
@@ -349,6 +343,15 @@ bpt.scan() (
         done
         ((++num_lines))
         num_bytes=0 content=''
+
+        # Decide whether currently scanning a string
+        # Only count newlines in strings (outside `ld ... rd` and inside quotes).
+        [[ $num_ld -gt 0 && -z "$quote" ]] || {
+            __start_string
+            ! $newline || { string+=$'\n' && ((++str_lines)); }
+        }
+
+        newline=true
     done
     __commit_string
     echo "$ 1 $num_lines 0" # The EOF token

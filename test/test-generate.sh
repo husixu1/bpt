@@ -8,18 +8,18 @@ setup_suite() {
     tmp_dir="$(mktemp -d)"
 
     # Regular dependency
-    echo "{{var0}}{{include: '${tmp_dir}/1.tpl'}}{{var0}}" >|"${tmp_dir}/0.tpl"
-    echo "{{var1}}{{include: '${tmp_dir}/2.tpl'}}{{var1}}" >|"${tmp_dir}/1.tpl"
-    echo "{{var2}}{{var2}}" >|"${tmp_dir}/2.tpl"
+    echo -n "{{var0}}{{include: '${tmp_dir}/1.tpl'}}{{var0}}" >|"${tmp_dir}/0.tpl"
+    echo -n "{{var1}}{{include: '${tmp_dir}/2.tpl'}}{{var1}}" >|"${tmp_dir}/1.tpl"
+    echo -n "{{var2}}{{var2}}" >|"${tmp_dir}/2.tpl"
 
     # Circular dependency
-    echo "{{var3}}{{include: '${tmp_dir}/4.tpl'}}{{var3}}" >|"${tmp_dir}/3.tpl"
-    echo "{{var4}}{{include: '${tmp_dir}/5.tpl'}}{{var4}}" >|"${tmp_dir}/4.tpl"
-    echo "{{var5}}{{include: '${tmp_dir}/3.tpl'}}{{var5}}" >|"${tmp_dir}/5.tpl"
+    echo -n "{{var3}}{{include: '${tmp_dir}/4.tpl'}}{{var3}}" >|"${tmp_dir}/3.tpl"
+    echo -n "{{var4}}{{include: '${tmp_dir}/5.tpl'}}{{var4}}" >|"${tmp_dir}/4.tpl"
+    echo -n "{{var5}}{{include: '${tmp_dir}/3.tpl'}}{{var5}}" >|"${tmp_dir}/5.tpl"
 
     # Missing include
-    echo "{{var6}}{{include: '${tmp_dir}/7.tpl'}}{{var6}}" >|"${tmp_dir}/6.tpl"
-    echo "{{include: 'asdfghjkl'}}" >|"${tmp_dir}/7.tpl"
+    echo -n "{{var6}}{{include: '${tmp_dir}/7.tpl'}}{{var6}}" >|"${tmp_dir}/6.tpl"
+    echo -n "{{include: 'asdfghjkl'}}" >|"${tmp_dir}/7.tpl"
 }
 
 teardown_suite() {
@@ -27,11 +27,16 @@ teardown_suite() {
 }
 
 # A helper function
-gen() { bpt.main ge <<<"$1"; }
+gen() { bpt.main ge < <(printf %s "$1"); }
 
 # Scanner Feature Tests =======================================================
 # Legal Inputs ----------------------------------------------------------------
 test_newlines() {
+    # Trailing newlines
+    assert_no_diff <(printf 'abc'$'\n') <(gen 'abc'$'\n')
+    assert_no_diff <(printf 'abc'$'\n\n') <(gen 'abc'$'\n\n')
+
+    # In-between newlines
     assert_equals 'abc'$'\n''def' "$(gen '{{var or "abc'$'\n''def"}}')"
     assert_equals 'abc'$'\n\n''def' "$(gen '{{var or "abc'$'\n\n''def"}}')"
     assert_equals $'\n''abc'$'\n''def'$'\n.' "$(gen $'\n''abc'$'\n''def'$'\n' && echo .)"
