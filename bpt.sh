@@ -539,7 +539,10 @@ bpt.__reduce_generate() {
 
         # Reduce the document
         case "$stmt_type" in
-        STR) contents[$s]+="{ e ${stmt@Q}; };" ;;
+        STR) case "$stmt" in
+            '') contents[$s]+=":;" ;;
+            *) contents[$s]+="{ e ${stmt@Q}; };" ;;
+            esac ;;
         BUILTIN | VAR) contents[$s]+="{ e \"$stmt\"; };" ;;
         INCLUDE) contents[$s]+="$stmt" ;;
         FORIN | IF) contents[$s]+="{ $stmt; };" ;;
