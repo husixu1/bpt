@@ -218,6 +218,21 @@ test_if_basic() {
     assert_equals 123450 "$(gen '{{if "1": {{for i in {{seq: "5"}}: {{i}}}}"0"}}')"
 }
 
+test_if_shorthand() {
+    local var=1
+    assert_equals 1 "$(gen '{{"": "0" : "1"}}')"
+    assert_equals 0 "$(gen '{{"1": "0" : "1"}}')"
+
+    assert_equals '' "$(gen '{{"": "0"}}')"
+    assert_equals 0 "$(gen '{{"1": "0"}}')"
+
+    assert_equals true "$(gen '{{"1"}}')"
+    assert_equals false "$(gen '{{""}}')"
+    assert_equals true "$(gen '{{{{var}}}}')"
+    assert_equals false "$(gen '{{!{{var}}}}')"
+    assert_equals false "$(gen '{{ ! {{var}} }}')"
+}
+
 test_if_elif_else() {
     assert_equals 1 "$(gen '{{if "": "0" else: "1"}}')"
     assert_equals 1 "$(gen '{{if "": "0" elif "1": "1"}}')"
