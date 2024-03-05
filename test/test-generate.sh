@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck disable=SC2317
 
 # Setup & Teardown ============================================================
 setup_suite() {
@@ -114,6 +115,12 @@ test_var() {
     local var0='' var1=100 var2=abc
     assert_equals '' "$(gen '{{var0}}')"
     assert_equals 100 "$(gen '{{var1}}')"
+
+    # var names starting/ending with keywords such as 'in' an 'or'
+    local instance=123 orange='orange' actor='actor'
+    assert_equals "$instance" "$(gen '{{instance}}')"
+    assert_equals "$orange" "$(gen '{{orange or "cat"}}')"
+    assert_equals "$actor" "$(gen '{{actor or "cat"}}')"
 }
 
 test_default_var() {
@@ -244,6 +251,7 @@ test_builtin() {
     assert_equals '{{' "$(gen '{{quote: "{{"}}')"
 }
 
+# shellcheck disable=SC2034
 test_include() {
     local var0=0 var1=1 var2=2 var3=3 var4=4 var5=5 var6=6
     assert_equals '22' "$(gen "{{include: \"${tmp_dir}/2.tpl\"}}")"

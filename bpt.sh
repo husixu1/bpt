@@ -191,14 +191,15 @@ bpt.scan() (
     for ((i = 0; i < ${#ld}; ++i)); do e_ld+="${ESC["${ld:i:1}"]}${ld:i:1}"; done
     for ((i = 0; i < ${#rd}; ++i)); do e_rd+="${ESC["${rd:i:1}"]}${rd:i:1}"; done
 
-    # Keywords
-    local -ra KW=(
-        "${e_ld}" "${e_rd}"
+    local -a KW=('==' '!=' '>' '<' ':' '\!' '"' "'" '\(' '\)') # Keywords
+    local -a SKW=( # Keywords ending with an alphanumeric character
         '-eq' '-ne' '-gt' '-lt' '-ge' '-le'
-        '==' '!=' '>' '<' ':' '\!' '"' "'" '\(' '\)'
         'and' 'or' 'if' 'elif' 'else' 'for' 'in' 'include'
     )
+    if [[ "$e_ld" =~ [[:alnum:]_]$ ]]; then SKW+=("$e_ld"); else KW+=("$e_ld"); fi
+    if [[ "$e_rd" =~ [[:alnum:]_]$ ]]; then SKW+=("$e_rd"); else KW+=("$e_rd"); fi
     local -r KW_RE="$(IFS='|' && echo -n "${KW[*]}")"
+    local -r SKW_RE="$(IFS='|' && echo -n "${SKW[*]}")"
     local -r ID_RE='[[:alpha:]_][[:alnum:]_]*'
 
     # Scanner states
@@ -274,7 +275,8 @@ bpt.scan() (
             else
                 # Non-strings. Commit string first.
                 __commit_string
-                if [[ $line =~ ^(${KW_RE}) ]]; then
+                if [[ $line =~ ^(${KW_RE}) ||
+                    $line =~ ^(${SKW_RE})($|[^[:alnum:]_]) ]]; then
                     # Inside `ld ... rd` and matches a keyword at front
                     content="${BASH_REMATCH[1]}"
                     case "$content" in
@@ -285,6 +287,8 @@ bpt.scan() (
                     '>') echo -n strgt ;; '<') echo -n strlt ;;
                     '!') echo -n ex ;; ':') echo -n cl ;;
                     '(') echo -n lp ;; ')') echo -n rp ;;
+                    and | or | if | elif | else) ;&
+                    for | in | include) echo -n "$content" ;;
                     '"' | "'")
                         quote="$content"
                         __start_string
@@ -301,8 +305,6 @@ bpt.scan() (
                         ((num_ld != 0)) || __start_string
                         echo -n rd
                         ;;
-                    and | or | if | elif | else) ;&
-                    for | in | include) echo -n "$content" ;;
                     *)
                         $error_fn "$num_lines" "$num_bytes" \
                             "Internal error: Unrecognized token ${content}"
@@ -323,7 +325,8 @@ bpt.scan() (
                     content="$line"
 
                     # Contents are either keywords or identifiers
-                    if [[ $content =~ (${KW_RE}) ]]; then
+                    if [[ $content =~ (${KW_RE}) ||
+                        $content =~ (${SKW_RE})($|[^[:alnum:]_]?) ]]; then
                         content="${content%%"${BASH_REMATCH[1]}"*}"
                     fi
                     if [[ ! $content =~ ^(${ID_RE}) ]]; then
