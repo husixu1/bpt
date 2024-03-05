@@ -908,11 +908,11 @@ bpt.main() (
     [[ $reduce_fn != bpt.__reduce_generate ]] || {
         read -r -d '' HEADER <<-'EOF'
 #!/bin/bash
-\unset -f echo || true
-e(){ local OIFS="$IFS"; IFS=; echo -n "$*"; IFS="$OIFS"; };
-len(){ echo -n "${#1}"; };
+\unset -f echo printf || true
+e(){ printf '%s' "$@"; };
+len(){ e "${#1}"; };
 seq(){ command seq -s ' ' -- "$@" || kill $__BPT_BASHPID; };
-split(){ echo -n "$*"; };
+split(){ e "$*"; };
 EOF
         HEADER+=$'\n'
     }
