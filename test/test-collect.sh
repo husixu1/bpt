@@ -59,6 +59,7 @@ test_collect_vars_nested() {
     assert_equals 'var'$'\n''var1' "$(cv '{{var or {{var1 or "123"}}}}')"
     assert_equals 'var'$'\n''var1'$'\n''var2' "$(cv '{{var or {{var1 and {{var2}}}}}}')"
     assert_equals 'var1'$'\n''var2' "$(cv '{{seq: {{var1 and {{var2}}}} "123"}}}')"
+    assert_equals 'var1'$'\n''var2' "$(cv 'abc{{quote: {{var1}} "def" {{var2}} "ghi"}}')"
 
     # Variables indside forin loop body should not be collected
     assert_equals '' "$(cv 'abc{{for var in "": "def"}}ghi')"

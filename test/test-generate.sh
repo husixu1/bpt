@@ -267,6 +267,7 @@ test_builtin() {
     assert_equals '1 2 3.' "$(gen '{{for i in "1 2 3": {{i}}"."}}')"
     assert_equals '1.2.3.' "$(gen '{{for i in {{split: "1 2 3"}}: {{i}}"."}}')"
     assert_equals '{{' "$(gen '{{quote: "{{"}}')"
+    assert_equals '2 33' "$(gen '{{quote: "2 3" "3" }}')"
 }
 
 # shellcheck disable=SC2034
