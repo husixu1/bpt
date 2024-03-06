@@ -175,6 +175,9 @@ test_bool_compare() {
 
     assert_equals 1 "$(gen '{{if "abc" == "def": "0" else: "1"}}')"
     assert_equals 0 "$(gen '{{if "abc" != "abf": "0" else: "1"}}')"
+
+    assert_equals 0 "$(gen '{{"abc" =~ "a.*": "0" : "1"}}')"
+    assert_equals 1 "$(gen '{{"abc" =~ "d.*": "0" : "1"}}')"
 }
 
 test_bool_nested() {
