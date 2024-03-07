@@ -5,22 +5,31 @@ on: [push, pull_request]
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      BASH_UNIT_VER: v2.1.0
+      SHFMT_VER: v3.6.0
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v2
 
+      - name: Cache Dependencies
+        id: cache-deps
+        uses: actions/cache@v3
+        with:
+          path: deps
+          key: deps-1-${{ env.BASH_UNIT_VER }}-${{env.SHFMT_VER}}
+
       - name: Install dependencies
         run: |
-          curl -k -sSL https://raw.githubusercontent.com/pgrange/bash_unit/v2.1.0/install.sh | bash
-          [[ $(sha256sum bash_unit | cut -d " " -f1) == dfb4d50cef03f4d49f083d4945352793499cd5ba1e2cc2482d6f80d510d20374 ]] || exit 1
-          curl -k -sSL https://github.com/mvdan/sh/releases/download/v3.6.0/shfmt_v3.6.0_linux_amd64 -o shfmt
-          [[ $(sha256sum shfmt | cut -d " " -f1) == 5741a02a641de7e56b8da170e71a97e58050d66a3cf485fb268d6a5a8bb74afb ]] || exit 1
+          mkdir deps && cd deps
+          curl -k -sSL "https://raw.githubusercontent.com/pgrange/bash_unit/${BASH_UNIT_VER}/install.sh" | bash
+          curl -k -sSL "https://github.com/mvdan/sh/releases/download/${SHFMT_VER}/shfmt_${SHFMT_VER}_linux_amd64" -o shfmt
           chmod +x shfmt
-
-      - name: Run Tests
-        run: ./bash_unit -f tap test/test-*
+        if: steps.cache-deps.outputs.cache-hit != 'true'
 
       - name: Check script formatting
-        run: ./shfmt -d -i 4 bpt.sh
+        run: ./deps/shfmt -d -i 4 bpt.sh test/test-*
 
+      - name: Run Tests
+        run: ./deps/bash_unit -f tap test/test-*

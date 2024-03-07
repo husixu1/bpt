@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck disable=SC2317
 
 # Setup & Teardown ============================================================
 setup_suite() {
@@ -8,18 +9,18 @@ setup_suite() {
     tmp_dir="$(mktemp -d)"
 
     # Regular dependency
-    echo "{{var0}}{{include: '${tmp_dir}/1.tpl'}}{{var0}}" >|"${tmp_dir}/0.tpl"
-    echo "{{var1}}{{include: '${tmp_dir}/2.tpl'}}{{var1}}" >|"${tmp_dir}/1.tpl"
-    echo "{{var2}}{{var2}}" >|"${tmp_dir}/2.tpl"
+    echo -n "{{var0}}{{include: '${tmp_dir}/1.tpl'}}{{var0}}" >|"${tmp_dir}/0.tpl"
+    echo -n "{{var1}}{{include: '${tmp_dir}/2.tpl'}}{{var1}}" >|"${tmp_dir}/1.tpl"
+    echo -n "{{var2}}{{var2}}" >|"${tmp_dir}/2.tpl"
 
     # Circular dependency
-    echo "{{var3}}{{include: '${tmp_dir}/4.tpl'}}{{var3}}" >|"${tmp_dir}/3.tpl"
-    echo "{{var4}}{{include: '${tmp_dir}/5.tpl'}}{{var4}}" >|"${tmp_dir}/4.tpl"
-    echo "{{var5}}{{include: '${tmp_dir}/3.tpl'}}{{var5}}" >|"${tmp_dir}/5.tpl"
+    echo -n "{{var3}}{{include: '${tmp_dir}/4.tpl'}}{{var3}}" >|"${tmp_dir}/3.tpl"
+    echo -n "{{var4}}{{include: '${tmp_dir}/5.tpl'}}{{var4}}" >|"${tmp_dir}/4.tpl"
+    echo -n "{{var5}}{{include: '${tmp_dir}/3.tpl'}}{{var5}}" >|"${tmp_dir}/5.tpl"
 
     # Missing include
-    echo "{{var6}}{{include: '${tmp_dir}/7.tpl'}}{{var6}}" >|"${tmp_dir}/6.tpl"
-    echo "{{include: 'asdfghjkl'}}" >|"${tmp_dir}/7.tpl"
+    echo -n "{{var6}}{{include: '${tmp_dir}/7.tpl'}}{{var6}}" >|"${tmp_dir}/6.tpl"
+    echo -n "{{include: 'asdfghjkl'}}" >|"${tmp_dir}/7.tpl"
 }
 
 teardown_suite() {
@@ -27,11 +28,16 @@ teardown_suite() {
 }
 
 # A helper function
-gen() { bpt.main ge <<<"$1"; }
+gen() { bpt.main ge < <(printf %s "$1"); }
 
 # Scanner Feature Tests =======================================================
 # Legal Inputs ----------------------------------------------------------------
 test_newlines() {
+    # Trailing newlines
+    assert_no_diff <(printf 'abc'$'\n') <(gen 'abc'$'\n')
+    assert_no_diff <(printf 'abc'$'\n\n') <(gen 'abc'$'\n\n')
+
+    # In-between newlines
     assert_equals 'abc'$'\n''def' "$(gen '{{var or "abc'$'\n''def"}}')"
     assert_equals 'abc'$'\n\n''def' "$(gen '{{var or "abc'$'\n\n''def"}}')"
     assert_equals $'\n''abc'$'\n''def'$'\n.' "$(gen $'\n''abc'$'\n''def'$'\n' && echo .)"
@@ -109,6 +115,12 @@ test_var() {
     local var0='' var1=100 var2=abc
     assert_equals '' "$(gen '{{var0}}')"
     assert_equals 100 "$(gen '{{var1}}')"
+
+    # var names starting/ending with keywords such as 'in' an 'or'
+    local instance=123 orange='orange' actor='actor'
+    assert_equals "$instance" "$(gen '{{instance}}')"
+    assert_equals "$orange" "$(gen '{{orange or "cat"}}')"
+    assert_equals "$actor" "$(gen '{{actor or "cat"}}')"
 }
 
 test_default_var() {
@@ -163,6 +175,9 @@ test_bool_compare() {
 
     assert_equals 1 "$(gen '{{if "abc" == "def": "0" else: "1"}}')"
     assert_equals 0 "$(gen '{{if "abc" != "abf": "0" else: "1"}}')"
+
+    assert_equals 0 "$(gen '{{"abc" =~ "a.*": "0" : "1"}}')"
+    assert_equals 1 "$(gen '{{"abc" =~ "d.*": "0" : "1"}}')"
 }
 
 test_bool_nested() {
@@ -206,6 +221,21 @@ test_if_basic() {
     assert_equals 123450 "$(gen '{{if "1": {{for i in {{seq: "5"}}: {{i}}}}"0"}}')"
 }
 
+test_if_shorthand() {
+    local var=1
+    assert_equals 1 "$(gen '{{"": "0" : "1"}}')"
+    assert_equals 0 "$(gen '{{"1": "0" : "1"}}')"
+
+    assert_equals '' "$(gen '{{"": "0"}}')"
+    assert_equals 0 "$(gen '{{"1": "0"}}')"
+
+    assert_equals true "$(gen '{{"1"}}')"
+    assert_equals false "$(gen '{{""}}')"
+    assert_equals true "$(gen '{{{{var}}}}')"
+    assert_equals false "$(gen '{{!{{var}}}}')"
+    assert_equals false "$(gen '{{ ! {{var}} }}')"
+}
+
 test_if_elif_else() {
     assert_equals 1 "$(gen '{{if "": "0" else: "1"}}')"
     assert_equals 1 "$(gen '{{if "": "0" elif "1": "1"}}')"
@@ -232,10 +262,26 @@ test_forin() {
 test_builtin() {
     assert_equals $'1 2 3' "$(gen '{{seq: "3"}}')"
     assert_equals '3' "$(gen '{{len: "abc"}}')"
+    assert_equals '1.2.3.' "$(gen '{{for i in "1" "2" "3": {{i}}"."}}')"
     assert_equals '123.' "$(gen '{{for i in {{quote: "1" "2" "3"}}: {{i}}"."}}')"
+    assert_equals '1 2 3.' "$(gen '{{for i in "1 2 3": {{i}}"."}}')"
+    assert_equals '1.2.3.' "$(gen '{{for i in {{split: "1 2 3"}}: {{i}}"."}}')"
     assert_equals '{{' "$(gen '{{quote: "{{"}}')"
+
 }
 
+test_quoting() {
+    assert_equals '2 33' "$(gen '{{quote: "2 3" "3" }}')"
+    assert_equals '2 33,' "$(gen '{{for i in {{quote: "2 3" "3" }}: {{i}}","}}')"
+
+    assert_equals '2 33' "$(gen '{{cat: "2 3" "3" }}')"
+    assert_equals '2,33,' "$(gen '{{for i in {{cat: "2 3" "3" }}: {{i}}","}}')"
+
+    assert_equals '2 3 3' "$(gen '{{split: "2 3" "3" }}')"
+    assert_equals '2,3,3,' "$(gen '{{for i in {{split: "2 3" "3" }}: {{i}}","}}')"
+}
+
+# shellcheck disable=SC2034
 test_include() {
     local var0=0 var1=1 var2=2 var3=3 var4=4 var5=5 var6=6
     assert_equals '22' "$(gen "{{include: \"${tmp_dir}/2.tpl\"}}")"
@@ -329,6 +375,8 @@ test_illegal_forin() {
 test_illegal_builtin() {
     assert_fail "gen '"'{{asdf: }}'"'"
     assert_fail "gen '"'{{asdf: "asdf"}}'"'"
+    assert_fail "gen '"'{{seq: "asdf"}}'"'"
+    assert_fail "gen '"'{{seq: "2" "asdf"}}'"'"
 }
 
 test_illegal_include() {

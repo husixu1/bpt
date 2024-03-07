@@ -1,21 +1,10 @@
 #!/bin/bash
-# vim: set foldlevel=0:
+# vim: set foldlevel=0 foldmethod=marker:
 # shellcheck disable=SC2317
 
 # Import once
-if [[ -n $__BPT_VERSION ]]; then return; fi
-readonly __BPT_VERSION="v0.1"
-
-# Add multiple traps for EXIT
-# See https://stackoverflow.com/questions/3338030
-bpt.__add_exit_trap() {
-    trap_add_cmd=${1:?${FUNCNAME[0]} usage error}
-    trap -- "$(
-        extract_trap_cmd() { printf '%s\n' "$3"; }
-        eval "extract_trap_cmd $(trap -p EXIT)"
-        printf '%s\n' "${trap_add_cmd}"
-    )" EXIT || echo "Unable to add to trap" >&2
-}
+[[ -z $__BPT_VERSION ]] || return
+readonly __BPT_VERSION="v0.2"
 
 # The shift-reduce LR(1) parser.
 # $1: Parse table name.
@@ -35,7 +24,7 @@ bpt.__add_exit_trap() {
 bpt.__lr_parse() (
     local -rn table="$1"
     local -r reduce_fn="${2:-echo}"
-    local -r error_fn="${3:-__error}"
+    local -r error_fn="${3:-bpt.__error}"
     if [[ -n $4 ]]; then local -r NDEBUG=false; else local -r NDEBUG=true; fi
 
     # 20 should be enough ...
@@ -61,7 +50,7 @@ bpt.__lr_parse() (
     local i=0 str_lines=0 buffer=''
 
     # $1: Goto state after shift
-    __shift() {
+    bpt.__shift() {
         states+=":$1"
         contents["$stack_size"]="$content"
         ((++stack_size))
@@ -69,7 +58,7 @@ bpt.__lr_parse() (
     }
 
     # $1: Rule
-    __reduce() {
+    bpt.__reduce() {
         # Although not robust, word splitting is faster than `read`
         # shellcheck disable=SC2206
         local num_rhs=$((${#rule[@]} - 1))
@@ -88,32 +77,32 @@ bpt.__lr_parse() (
     }
 
     # Simply print the result
-    __accept() {
+    bpt.__accept() {
         printf '%s' "${contents[1]}"
     }
 
     # Default error handler
-    __error() {
+    bpt.__error() {
         echo "Error: Line $(($1 + 1)) Column $(($2 + 1))"
         echo "$3"
     } >&2
 
     # Debugging support
     $NDEBUG || {
-        eval __orig"$(declare -f __shift)"
-        eval __orig"$(declare -f __reduce)"
-        eval __orig"$(declare -f __accept)"
-        __shift() {
+        eval __orig_"$(declare -f bpt.__shift)"
+        eval __orig_"$(declare -f bpt.__reduce)"
+        eval __orig_"$(declare -f bpt.__accept)"
+        bpt.__shift() {
             echo "[DBG] ${states##*:} Shift $1 \`$content\`" >&2
-            __orig__shift "$@"
+            __orig_bpt.__shift "$@"
         }
-        __reduce() {
+        bpt.__reduce() {
             echo "[DBG] ${states##*:} Reduce ${rule[*]}" >&2
-            __orig__reduce
+            __orig_bpt.__reduce
         }
-        __accept() {
+        bpt.__accept() {
             $NDEBUG || echo "[DBG] Result accepted" >&2
-            __orig__accept
+            __orig_bpt.__accept
         }
     }
 
@@ -131,14 +120,14 @@ bpt.__lr_parse() (
         action="${table["${states##*:},$token"]}"
         case "$action" in
         # Shift
-        s*) __shift "${action#s }" ;;
+        s*) bpt.__shift "${action#s }" ;;
         # Reduce
         r*) # shellcheck disable=SC2206
             rule=(${action#r })
-            __reduce
+            bpt.__reduce
             ;;
         # Accept
-        a) __accept && break ;;
+        a) bpt.__accept && break ;;
         # Error
         '')
             local expects='' rule_key=''
@@ -149,13 +138,13 @@ bpt.__lr_parse() (
                     expects+="${expects:+,}${BPT_PP_TOKEN_TABLE["${rule_key##*,}"]:-${rule_key##*,}}"
             done
             $error_fn "$num_lines" "$num_bytes" \
-                "Expects one of \`${expects[*]}\` but got \`${token}\` ($content)."
+                "Expecting \`${expects[*]}\` but got \`${token}\` ($content)."
             $NDEBUG || echo "[DBG] PARSER STATES ${states} TOKEN ${token} CONTENT ${content}." >&2
             exit 1
             ;;
         *) # Parse table error (internal error)
             echo "Internal error: STATES ${states} TOKEN ${token} CONTENT ${content}. " >&2
-            echo "Internal error: action '$action' not recognized." >&2
+            echo "Internal error: Action '$action' not recognized." >&2
             exit 1
             ;;
         esac
@@ -181,14 +170,17 @@ bpt.__lr_parse() (
 #   cl: :           ex: !               eq: -eq         ne: -ne
 #   lt: -lt         gt: -gt             le: -le         ge: -ge
 #   streq: ==       strne: !=           strlt: <        strgt: >
-#   and|or|if|elif|else|for|in|include: <as is>
+#   strcm: =~
+#   and|or|if|elif|else|for|in|include|quote: <as is>
 #   id: [[:alpha:]_][[:alnum:]_]*
+#
+# shellcheck disable=SC2030
 bpt.scan() (
-    local -r ld="$1" rd="$2" error_fn="${3:-__error}"
+    local -r ld="$1" rd="$2" error_fn="${3:-bpt.__scan_error}"
     bpt.__test_delims "$ld" "$rd" || return 1
 
     # Default error handler
-    __error() {
+    bpt.__scan_error() {
         echo "Error: Line $(($1 + 1)) Column $(($2 + 1))"
         echo "$3"
     } >&2
@@ -202,14 +194,15 @@ bpt.scan() (
     for ((i = 0; i < ${#ld}; ++i)); do e_ld+="${ESC["${ld:i:1}"]}${ld:i:1}"; done
     for ((i = 0; i < ${#rd}; ++i)); do e_rd+="${ESC["${rd:i:1}"]}${rd:i:1}"; done
 
-    # Keywords
-    local -ra KW=(
-        "${e_ld}" "${e_rd}"
+    local -a KW=('==' '!=' '=~' '>' '<' ':' '\!' '"' "'" '\(' '\)') # Keywords
+    local -a SKW=( # Keywords ending with an alphanumeric character
         '-eq' '-ne' '-gt' '-lt' '-ge' '-le'
-        '==' '!=' '>' '<' ':' '\!' '"' "'" '\(' '\)'
-        'and' 'or' 'if' 'elif' 'else' 'for' 'in' 'include'
+        'and' 'or' 'if' 'elif' 'else' 'for' 'in' 'include' 'quote'
     )
+    if [[ "$e_ld" =~ [[:alnum:]_]$ ]]; then SKW+=("$e_ld"); else KW+=("$e_ld"); fi
+    if [[ "$e_rd" =~ [[:alnum:]_]$ ]]; then SKW+=("$e_rd"); else KW+=("$e_rd"); fi
     local -r KW_RE="$(IFS='|' && echo -n "${KW[*]}")"
+    local -r SKW_RE="$(IFS='|' && echo -n "${SKW[*]}")"
     local -r ID_RE='[[:alpha:]_][[:alnum:]_]*'
 
     # Scanner states
@@ -224,13 +217,13 @@ bpt.scan() (
     # `str_lines=''` means currently outside the scope of string
     local string='' str_lines='' str_bytes=''
     # Start scannign string
-    __start_string() {
+    bpt.__start_string() {
         str_lines="${str_lines:-1}"
         str_bytes="${str_bytes:-$num_bytes}"
     }
     # Commit (possibly multiline) string buffer
     # shellcheck disable=SC2031
-    __commit_string() {
+    bpt.__commit_string() {
         ((str_lines > 0)) || return
         echo "str $str_lines $((num_lines + 1 - str_lines)) $str_bytes"
         # `$content` can be a literal `-ne`. Thus printf is needed.
@@ -239,15 +232,9 @@ bpt.scan() (
     }
 
     # Tokenizer
-    local line='' content=''
-    while IFS= read -r line || [[ $line ]]; do
-        # Decide whether currently scanning a string
-        # Only count newlines in strings (outside `ld ... rd` and inside quotes).
-        [[ $num_ld -gt 0 && -z "$quote" ]] || {
-            __start_string
-            [[ $num_lines -eq 0 ]] || { string+=$'\n' && ((++str_lines)); }
-        }
-
+    local line='' content='' newline=true
+    bpt.__start_string
+    while IFS= read -r line || { newline=false && false; } || [[ $line ]]; do
         # Scan the line
         while [[ -n "$line" ]]; do
             content='' # The consumed content (to be removed from `line`)
@@ -255,7 +242,7 @@ bpt.scan() (
                 # Outside `ld ... rd`
                 if [[ $line =~ ^(${e_ld}) ]]; then
                     # If met `ld`, enter `ld ... rd`
-                    __commit_string
+                    bpt.__commit_string
                     ((++num_ld))
                     content="${BASH_REMATCH[1]}"
                     echo "ld 1 $num_lines $num_bytes"
@@ -283,15 +270,16 @@ bpt.scan() (
                     content+="${line_copy%%"${quote}"*}${quote}"
                     string+="${line_copy%%"${quote}"*}"
                     quote=''
-                    __commit_string
+                    bpt.__commit_string
                 else
                     content="$line_copy"
                     string+="$line_copy"
                 fi
             else
                 # Non-strings. Commit string first.
-                __commit_string
-                if [[ $line =~ ^(${KW_RE}) ]]; then
+                bpt.__commit_string
+                if [[ $line =~ ^(${KW_RE}) ||
+                    $line =~ ^(${SKW_RE})($|[^[:alnum:]_]) ]]; then
                     # Inside `ld ... rd` and matches a keyword at front
                     content="${BASH_REMATCH[1]}"
                     case "$content" in
@@ -300,11 +288,14 @@ bpt.scan() (
                     '-le') echo -n le ;; '-ge') echo -n ge ;;
                     '==') echo -n streq ;; '!=') echo -n strne ;;
                     '>') echo -n strgt ;; '<') echo -n strlt ;;
+                    '=~') echo -n strcm ;;
                     '!') echo -n ex ;; ':') echo -n cl ;;
                     '(') echo -n lp ;; ')') echo -n rp ;;
+                    and | or | if | elif | else) ;&
+                    for | in | include | quote) echo -n "$content" ;;
                     '"' | "'")
                         quote="$content"
-                        __start_string
+                        bpt.__start_string
                         ;;
                     "$ld")
                         ((++num_ld))
@@ -315,11 +306,9 @@ bpt.scan() (
                             $error_fn "$num_lines" "$num_bytes" "Extra '$rd'."
                             return 1
                         }
-                        ((num_ld != 0)) || __start_string
+                        ((num_ld != 0)) || bpt.__start_string
                         echo -n rd
                         ;;
-                    and | or | if | elif | else) ;&
-                    for | in | include) echo -n "$content" ;;
                     *)
                         $error_fn "$num_lines" "$num_bytes" \
                             "Internal error: Unrecognized token ${content}"
@@ -332,22 +321,24 @@ bpt.scan() (
                     }
                 else # Inside `ld ... rd` but outside quotes
                     # Ignore spaces inside `ld ... rd`
-                    [[ $line =~ ^([[:space:]]+)(.*) ]] && {
+                    [[ ! $line =~ ^([[:space:]]+)(.*) ]] || {
                         line="${BASH_REMATCH[2]}"
                         ((num_bytes += ${#BASH_REMATCH[1]}))
                         continue
                     }
                     content="$line"
 
-                    # Contents are either keywords or identifiers
-                    if [[ $content =~ (${KW_RE}) ]]; then
+                    # Strip possible keywords suffixing variable names
+                    ! [[ $content =~ (${KW_RE}) ||
+                        $content =~ (${SKW_RE})($|[^[:alnum:]_]?) ]] ||
                         content="${content%%"${BASH_REMATCH[1]}"*}"
-                    fi
-                    if [[ ! $content =~ ^(${ID_RE}) ]]; then
+
+                    # Contents must be keywords
+                    [[ $content =~ ^(${ID_RE}) ]] || {
                         $error_fn "$num_lines" "$num_bytes" \
                             "'$content' is not a valid identifier"
                         return 1
-                    fi
+                    }
                     content="${BASH_REMATCH[1]}"
                     echo "id 1 $num_lines $num_bytes"
                     printf '%s\n' "$content"
@@ -360,8 +351,17 @@ bpt.scan() (
         done
         ((++num_lines))
         num_bytes=0 content=''
+
+        # Decide whether currently scanning a string
+        # Only count newlines in strings (outside `ld ... rd` and inside quotes).
+        [[ $num_ld -gt 0 && -z "$quote" ]] || {
+            bpt.__start_string
+            ! $newline || { string+=$'\n' && ((++str_lines)); }
+        }
+
+        newline=true
     done
-    __commit_string
+    bpt.__commit_string
     echo "$ 1 $num_lines 0" # The EOF token
     echo ''                 # The EOF content (empty)
 )
@@ -390,8 +390,8 @@ bpt.__reduce_collect_vars() {
         [[ ${#rule[@]} -eq 4 || ${rule[4]} != VAR ]] ||
             contents[$s]+="${contents[$((s + 3))]}"
         ;;
-    BUILTIN) contents[$s]="${contents[$((s + 3))]}" ;;
-    INCLUDE) contents[$s]="$(__recursive_process "${contents[$((s + 3))]}")"$'\n' ;;
+    BUILTIN | QUOTE) contents[$s]="${contents[$((s + 3))]}" ;;
+    INCLUDE) contents[$s]="$(bpt.__recursive_process "${contents[$((s + 3))]}")"$'\n' ;;
     FORIN) # Filter tokens defined by the FORIN rule
         contents[$s]="${contents[$((s + 4))]}"
         local var
@@ -421,7 +421,7 @@ bpt.__reduce_collect_includes() {
     VAR) contents[$s]='' ;;
     INCLUDE)
         contents[$s]="${contents[$((s + 3))]}"$'\n'
-        contents[$s]+="$(__recursive_process "${contents[$((s + 3))]}")"
+        contents[$s]+="$(bpt.__recursive_process "${contents[$((s + 3))]}")"
         ;;
     *) # Prevent the propagation of all other non-terminals
         [[ "${#rule[@]}" -ne 1 ]] || { contents[$s]='' && return; }
@@ -444,8 +444,7 @@ bpt.__reduce_generate() {
     STR | UOP | BOP) ;;
     # Tag location for BUILTIN error reporting
     ID) contents[$s]+=":$num_lines:$num_bytes" ;;
-    VAR)
-        case "${rule[3]}" in
+    VAR) case "${rule[3]}" in
         rd) contents[$s]="\${${contents[$((s + 1))]%:*:*}}" ;;
         or) contents[$s]="\${${contents[$((s + 1))]%:*:*}:-\$(e " ;;&
         and) contents[$s]="\${${contents[$((s + 1))]%:*:*}:+\$(e " ;;&
@@ -453,8 +452,7 @@ bpt.__reduce_generate() {
             VAR) contents[$s]+="\"${contents[$((s + 3))]}\")}" ;;
             STR) contents[$s]+="${contents[$((s + 3))]@Q})}" ;;
             esac ;;
-        esac
-        ;;
+        esac ;;
     ARGS)
         # Strip the tag from STMT
         local stmt_type='' stmt=
@@ -473,16 +471,16 @@ bpt.__reduce_generate() {
         # Note: `${stmt@Q}` is faster than `printf '%q' ${stmt}`
         case "$stmt_type" in
         STR) contents[$s]+=" ${stmt@Q} " ;;
-        VAR | BUILTIN) contents[$s]+=" $stmt " ;;
+        VAR | BUILTIN | QUOTE) contents[$s]+=" $stmt " ;;
         INCLUDE | FORIN | IF) contents[$s]+=" \"\$($stmt)\" " ;;
         esac
         ;;
-    BUILTIN)
-        # Filter allowed builtints
+    QUOTE) contents[$s]="\"\$(e ${contents[$((s + 3))]})\"" ;;
+    BUILTIN) # Filter allowed builtints
         local builtin_name=${contents[$((s + 1))]%:*:*}
         case "$builtin_name" in
-        len | seq) contents[$s]="\$($builtin_name ${contents[$((s + 3))]})" ;;
-        quote) contents[$s]="\"\$(e ${contents[$((s + 3))]})\"" ;;
+        len | seq | split) contents[$s]="\$($builtin_name ${contents[$((s + 3))]})" ;;
+        cat) contents[$s]="\$(e ${contents[$((s + 3))]})" ;;
         *) # Extract and compute correct error location from ID
             local line_col="${contents[$((s + 1))]#"$builtin_name"}"
             local err_line=${line_col%:*} && err_line="${err_line:1}"
@@ -493,16 +491,16 @@ bpt.__reduce_generate() {
             ;;
         esac
         ;;
-    INCLUDE) contents[$s]="$(__recursive_process "${contents[$((s + 3))]}")" ;;
+    INCLUDE) contents[$s]="$(bpt.__recursive_process "${contents[$((s + 3))]}")" ;;
     FORIN) contents[$s]="for ${contents[$((s + 2))]%:*:*} in ${contents[$((s + 4))]}; do ${contents[$((s + 6))]} done" ;;
-    BOOL)
-        case "${#rule[@]}" in
+    BOOL) case "${#rule[@]}" in
         2) contents[$s]="\"\$(e ${contents[$s]})\"" ;;
-        4) contents[$s]+=" ${contents[$((s + 1))]} \"\$(e ${contents[$((s + 2))]})\"" ;;
-        esac
-        ;;
-    BOOLA)
-        case "${#rule[@]}" in
+        4) case "${contents[$((s + 1))]}" in # Don't quote the rhs of `=~`
+            '=~') contents[$s]+=" ${contents[$((s + 1))]} \$(e ${contents[$((s + 2))]})" ;;
+            *) contents[$s]+=" ${contents[$((s + 1))]} \"\$(e ${contents[$((s + 2))]})\"" ;;
+            esac ;;
+        esac ;;
+    BOOLA) case "${#rule[@]}" in
         4) case "${rule[1]}" in
             BOOLA) contents[$s]="${contents[$s]} && ${contents[$((s + 2))]}" ;;
             lp) contents[$s]="( ${contents[$((s + 1))]} )" ;;
@@ -510,28 +508,26 @@ bpt.__reduce_generate() {
         5) contents[$s]="${contents[$s]} && ${contents[$((s + 2))]} ${contents[$((s + 3))]}" ;;
         6) contents[$s]="${contents[$s]} && ( ${contents[$((s + 3))]} )" ;;
         7) contents[$s]="${contents[$s]} && ${contents[$((s + 2))]} ( ${contents[$((s + 4))]} )" ;;
-        esac
-        ;;
-    BOOLO)
-        case "${#rule[@]}" in
+        esac ;;
+    BOOLO) case "${#rule[@]}" in
         4) contents[$s]="${contents[$s]} || ${contents[$((s + 2))]}" ;;
         5) contents[$s]="${contents[$s]} || ${contents[$((s + 2))]} ${contents[$((s + 3))]}" ;;
-        esac
-        ;;
+        esac ;;
     BOOLS) [[ ${#rule[@]} -eq 2 ]] || contents[$s]="${contents[$s]} ${contents[$((s + 1))]}" ;;
-    ELSE)
-        case "${#rule[@]}" in
+    ELSE) case "${#rule[@]}" in
         1) contents[$s]='' ;;
         *) contents[$s]="else ${contents[$((s + 2))]}" ;;
-        esac
-        ;;
-    ELIF)
-        case "${#rule[@]}" in
+        esac ;;
+    ELIF) case "${#rule[@]}" in
         1) contents[$s]='' ;;
         *) contents[$s]="${contents[$s]} elif [[ ${contents[$((s + 2))]} ]]; then ${contents[$((s + 4))]}" ;;
-        esac
-        ;;
-    IF) contents[$s]="if [[ ${contents[$((s + 2))]} ]]; then ${contents[$((s + 4))]}${contents[$((s + 5))]}${contents[$((s + 6))]} fi" ;;
+        esac ;;
+    IF) case "${#rule[@]}" in
+        9) contents[$s]="if [[ ${contents[$((s + 2))]} ]]; then ${contents[$((s + 4))]}${contents[$((s + 5))]}${contents[$((s + 6))]} fi" ;;
+        8) contents[$s]="if [[ ${contents[$((s + 1))]} ]]; then ${contents[$((s + 3))]} else ${contents[$((s + 5))]} fi" ;;
+        6) contents[$s]="if [[ ${contents[$((s + 1))]} ]]; then ${contents[$((s + 3))]} fi" ;;
+        4) contents[$s]="if [[ ${contents[$((s + 1))]} ]]; then { e true; }; else { e false; }; fi" ;;
+        esac ;;
     STMT)
         # Tag the sub-type to the reduce result
         # (Need to strip the tag wherever STMT is used)
@@ -547,7 +543,11 @@ bpt.__reduce_generate() {
 
         # Reduce the document
         case "$stmt_type" in
-        STR) contents[$s]+="{ e ${stmt@Q}; };" ;;
+        STR) case "$stmt" in
+            '') contents[$s]+=":;" ;;
+            *) contents[$s]+="{ e ${stmt@Q}; };" ;;
+            esac ;;
+        QUOTE) contents[$s]+="{ e $stmt; };" ;;
         BUILTIN | VAR) contents[$s]+="{ e \"$stmt\"; };" ;;
         INCLUDE) contents[$s]+="$stmt" ;;
         FORIN | IF) contents[$s]+="{ $stmt; };" ;;
@@ -571,8 +571,11 @@ bpt.__reduce_generate() {
 # Grammar:
 #   DOC     -> DOC STMT
 #            | .
-#   STMT    -> IF | FORIN | INCLUDE | BUILTIN | VAR | STR .
-#   IF      -> ld if BOOLS cl DOC ELIF ELSE rd .
+#   STMT    -> IF | FORIN | INCLUDE | BUILTIN | QUOTE | VAR | STR .
+#   IF      -> ld if BOOLS cl DOC ELIF ELSE rd
+#            | ld BOOLS cl DOC cl DOC rd
+#            | ld BOOLS cl DOC rd
+#            | ld BOOLS rd .
 #   ELIF    -> ELIF elif BOOLS cl DOC
 #            | .
 #   ELSE    -> else cl DOC
@@ -593,6 +596,7 @@ bpt.__reduce_generate() {
 #   FORIN   -> ld for ID in ARGS cl DOC rd .
 #   INCLUDE -> ld include cl STR rd .
 #   BUILTIN -> ld ID cl ARGS rd .
+#   QUOTE   -> ld quote cl ARGS rd .
 #   ARGS    -> ARGS STMT
 #            | STMT .
 #   VAR     -> ld ID rd
@@ -600,7 +604,8 @@ bpt.__reduce_generate() {
 #            | ld ID or STR rd
 #            | ld ID and VAR rd
 #            | ld ID and STR rd .
-#   BOP     -> ne | eq | gt | lt | ge | le | strgt | strlt | streq | strne .
+#   BOP     -> ne     | eq    | gt    | lt    | ge    | le
+#            | strne  | streq | strgt | strlt | strcm .
 #   UOP     -> ex .
 #   ID      -> id .
 #   STR     -> str .
@@ -625,7 +630,7 @@ bpt.process() (
     file_stack+=("$file")
 
     # Curry this function so that it can be called by the reducer recursively
-    __recursive_process() {
+    bpt.__recursive_process() {
         local file
         # Detect recursive includes
         for file in "${file_stack[@]}"; do
@@ -641,7 +646,7 @@ bpt.process() (
     }
 
     # Pretty-print parse errors
-    __error_handler() {
+    bpt.__error_handler() {
         echo "Error: File '$file' Line $(($1 + 1)) Column $(($2 + 1))"
         echo "$3"
         echo
@@ -653,8 +658,8 @@ bpt.process() (
     } >&2
 
     # Prase with the provided reduce function
-    bpt.__lr_parse BPT_PARSE_TABLE "$reduce_fn" __error_handler "$debug" \
-        < <(bpt.scan "$ld" "$rd" __error_handler <"$file")
+    bpt.__lr_parse __BPT_PARSE_TABLE "$reduce_fn" bpt.__error_handler "$debug" \
+        < <(bpt.scan "$ld" "$rd" bpt.__error_handler <"$file")
 )
 
 # $1: Left deilmiter
@@ -667,8 +672,13 @@ bpt.fingerprint() {
 
     # Collect vars and includes
     local -a vars=() incs=()
-    mapfile -t vars < <(bpt.__dedup "$(bpt.process "$ld" "$rd" bpt.__reduce_collect_vars "$infile" "$debug")")
-    mapfile -t incs < <(bpt.__dedup "$(bpt.process "$ld" "$rd" bpt.__reduce_collect_includes "$infile" "$debug")")
+    local var_list inc_list
+    var_list="$(bpt.process "$ld" "$rd" bpt.__reduce_collect_vars "$infile" "$debug")" || exit 1
+    var_list="$(bpt.__dedup "$var_list")"
+    [[ -z $var_list ]] || mapfile -t vars <<<"$var_list"
+    inc_list="$(bpt.process "$ld" "$rd" bpt.__reduce_collect_includes "$infile" "$debug")" || exit 1
+    inc_list="$(bpt.__dedup "$inc_list")"
+    [[ -z $inc_list ]] || mapfile -t incs <<<"$inc_list"
     local fingerprint=''
     local -a md5=()
 
@@ -684,10 +694,10 @@ bpt.fingerprint() {
     done
     # Digest and check for missing vars
     for var in "${vars[@]}"; do
-        if [[ -z ${!var+.} ]]; then
+        [[ ${!var+.} ]] || {
             echo "Error: variable '$var' is required but not set" >&2
             return 1
-        fi
+        }
         md5=($(echo -n "${var}${!var}" | md5sum)) && fingerprint+=":V:${md5[0]}"
     done
 
@@ -767,17 +777,18 @@ bpt.print_help() {
     echo '    {{ var or {{var2}} }}'
     echo
     echo "  Branching"
+    echo '    {{ {{x}}: {{var1}} : {{var2}} }}'
     echo '    {{ if {{x}}: {{var1}} else : {{var2}} }}'
     echo '    {{ if {{x}} -gt "5": {{var1}} elif: {{var2}} else: {{var3}} }}'
     echo '    {{ if ({{var1}} > "abc" and {{var2}} < "def") or {{var3}} == "hello" : {{ include : "input2.tpl" }} }}'
     echo
     echo "    Available operators are: "
     echo "      compare numbers:   -ne, -eq, -gt, -lt, -ge, -le "
-    echo "      compare strings:   >, <, ==, !="
+    echo "      compare strings:   >, <, ==, !=, =~"
     echo "      logical operators: and, or, !"
     echo "      grouping:          ()"
     echo
-    echo "  Looping"
+    echo "  Iterate a list"
     echo '    {{ for {{i}} in "a" "b" "c": "abc"{{i}}"def" }}'
     echo '    {{ for {{i}} in {{seq: "5"}}: "abc"{{i}}"def" }}'
     echo
@@ -787,7 +798,9 @@ bpt.print_help() {
     echo "  Builtin functions"
     echo '    {{ seq: "5" }}'
     echo '    {{ len: "abc" }}'
+    echo '    {{ cat: "1" "2" "3" }}'
     echo '    {{ quote: {{seq: "1" "2" "5"}} }}'
+    echo '    {{ split: "1 2 3" }}'
     echo
     echo "  Note: bpt doesn't distinguish between strings and numbers."
     echo "    All non-keywords should be treated as strings."
@@ -875,7 +888,8 @@ bpt.main() (
     # If file not provided, read into a temporary file and use that file.
     [[ -n $infile ]] || {
         infile="$(mktemp)" || { echo "Error: mktemp failed." >&2 && exit 1; }
-        bpt.__add_exit_trap "rm -f \"${infile:?}\""
+        # shellcheck disable=SC2064
+        trap "rm -f -- \"${infile:?}\"; trap - RETURN" RETURN
         cat >"${infile:?}"
     }
 
@@ -886,332 +900,21 @@ bpt.main() (
         [streq]='==' [strne]='!=' [strgt]='>' [strlt]='<'
         [cl]=':' [ex]='!' [lp]='(' [rp]=')')
 
-    # shellcheck disable=SC2034
-    # >>> BPT_PARSE_TABLE_S >>>
-    local -rA BPT_PARSE_TABLE=( # {{{
-        ["0,ld"]="r DOC" ["0,str"]="r DOC" ["0,$"]="r DOC" ["0,DOC"]="1" ["1,ld"]="s 9"
-        ["1,str"]="s 10" ["1,$"]="a" ["1,STMT"]="2" ["1,IF"]="3" ["1,FORIN"]="4"
-        ["1,INCLUDE"]="5" ["1,BUILTIN"]="6" ["1,VAR"]="7" ["1,STR"]="8"
-        ["2,ld"]="r DOC DOC STMT" ["2,rd"]="r DOC DOC STMT" ["2,elif"]="r DOC DOC STMT"
-        ["2,else"]="r DOC DOC STMT" ["2,str"]="r DOC DOC STMT" ["2,$"]="r DOC DOC STMT"
-        ["3,ld"]="r STMT IF" ["3,cl"]="r STMT IF" ["3,rd"]="r STMT IF"
-        ["3,elif"]="r STMT IF" ["3,else"]="r STMT IF" ["3,or"]="r STMT IF"
-        ["3,and"]="r STMT IF" ["3,rp"]="r STMT IF" ["3,ne"]="r STMT IF"
-        ["3,eq"]="r STMT IF" ["3,gt"]="r STMT IF" ["3,lt"]="r STMT IF"
-        ["3,ge"]="r STMT IF" ["3,le"]="r STMT IF" ["3,strgt"]="r STMT IF"
-        ["3,strlt"]="r STMT IF" ["3,streq"]="r STMT IF" ["3,strne"]="r STMT IF"
-        ["3,str"]="r STMT IF" ["3,$"]="r STMT IF" ["4,ld"]="r STMT FORIN"
-        ["4,cl"]="r STMT FORIN" ["4,rd"]="r STMT FORIN" ["4,elif"]="r STMT FORIN"
-        ["4,else"]="r STMT FORIN" ["4,or"]="r STMT FORIN" ["4,and"]="r STMT FORIN"
-        ["4,rp"]="r STMT FORIN" ["4,ne"]="r STMT FORIN" ["4,eq"]="r STMT FORIN"
-        ["4,gt"]="r STMT FORIN" ["4,lt"]="r STMT FORIN" ["4,ge"]="r STMT FORIN"
-        ["4,le"]="r STMT FORIN" ["4,strgt"]="r STMT FORIN" ["4,strlt"]="r STMT FORIN"
-        ["4,streq"]="r STMT FORIN" ["4,strne"]="r STMT FORIN" ["4,str"]="r STMT FORIN"
-        ["4,$"]="r STMT FORIN" ["5,ld"]="r STMT INCLUDE" ["5,cl"]="r STMT INCLUDE"
-        ["5,rd"]="r STMT INCLUDE" ["5,elif"]="r STMT INCLUDE"
-        ["5,else"]="r STMT INCLUDE" ["5,or"]="r STMT INCLUDE" ["5,and"]="r STMT INCLUDE"
-        ["5,rp"]="r STMT INCLUDE" ["5,ne"]="r STMT INCLUDE" ["5,eq"]="r STMT INCLUDE"
-        ["5,gt"]="r STMT INCLUDE" ["5,lt"]="r STMT INCLUDE" ["5,ge"]="r STMT INCLUDE"
-        ["5,le"]="r STMT INCLUDE" ["5,strgt"]="r STMT INCLUDE"
-        ["5,strlt"]="r STMT INCLUDE" ["5,streq"]="r STMT INCLUDE"
-        ["5,strne"]="r STMT INCLUDE" ["5,str"]="r STMT INCLUDE" ["5,$"]="r STMT INCLUDE"
-        ["6,ld"]="r STMT BUILTIN" ["6,cl"]="r STMT BUILTIN" ["6,rd"]="r STMT BUILTIN"
-        ["6,elif"]="r STMT BUILTIN" ["6,else"]="r STMT BUILTIN"
-        ["6,or"]="r STMT BUILTIN" ["6,and"]="r STMT BUILTIN" ["6,rp"]="r STMT BUILTIN"
-        ["6,ne"]="r STMT BUILTIN" ["6,eq"]="r STMT BUILTIN" ["6,gt"]="r STMT BUILTIN"
-        ["6,lt"]="r STMT BUILTIN" ["6,ge"]="r STMT BUILTIN" ["6,le"]="r STMT BUILTIN"
-        ["6,strgt"]="r STMT BUILTIN" ["6,strlt"]="r STMT BUILTIN"
-        ["6,streq"]="r STMT BUILTIN" ["6,strne"]="r STMT BUILTIN"
-        ["6,str"]="r STMT BUILTIN" ["6,$"]="r STMT BUILTIN" ["7,ld"]="r STMT VAR"
-        ["7,cl"]="r STMT VAR" ["7,rd"]="r STMT VAR" ["7,elif"]="r STMT VAR"
-        ["7,else"]="r STMT VAR" ["7,or"]="r STMT VAR" ["7,and"]="r STMT VAR"
-        ["7,rp"]="r STMT VAR" ["7,ne"]="r STMT VAR" ["7,eq"]="r STMT VAR"
-        ["7,gt"]="r STMT VAR" ["7,lt"]="r STMT VAR" ["7,ge"]="r STMT VAR"
-        ["7,le"]="r STMT VAR" ["7,strgt"]="r STMT VAR" ["7,strlt"]="r STMT VAR"
-        ["7,streq"]="r STMT VAR" ["7,strne"]="r STMT VAR" ["7,str"]="r STMT VAR"
-        ["7,$"]="r STMT VAR" ["8,ld"]="r STMT STR" ["8,cl"]="r STMT STR"
-        ["8,rd"]="r STMT STR" ["8,elif"]="r STMT STR" ["8,else"]="r STMT STR"
-        ["8,or"]="r STMT STR" ["8,and"]="r STMT STR" ["8,rp"]="r STMT STR"
-        ["8,ne"]="r STMT STR" ["8,eq"]="r STMT STR" ["8,gt"]="r STMT STR"
-        ["8,lt"]="r STMT STR" ["8,ge"]="r STMT STR" ["8,le"]="r STMT STR"
-        ["8,strgt"]="r STMT STR" ["8,strlt"]="r STMT STR" ["8,streq"]="r STMT STR"
-        ["8,strne"]="r STMT STR" ["8,str"]="r STMT STR" ["8,$"]="r STMT STR"
-        ["9,if"]="s 11" ["9,for"]="s 12" ["9,include"]="s 13" ["9,id"]="s 15"
-        ["9,ID"]="14" ["10,ld"]="r STR str" ["10,cl"]="r STR str" ["10,rd"]="r STR str"
-        ["10,elif"]="r STR str" ["10,else"]="r STR str" ["10,or"]="r STR str"
-        ["10,and"]="r STR str" ["10,rp"]="r STR str" ["10,ne"]="r STR str"
-        ["10,eq"]="r STR str" ["10,gt"]="r STR str" ["10,lt"]="r STR str"
-        ["10,ge"]="r STR str" ["10,le"]="r STR str" ["10,strgt"]="r STR str"
-        ["10,strlt"]="r STR str" ["10,streq"]="r STR str" ["10,strne"]="r STR str"
-        ["10,str"]="r STR str" ["10,$"]="r STR str" ["11,ld"]="s 9" ["11,lp"]="s 21"
-        ["11,ex"]="s 20" ["11,str"]="s 10" ["11,STMT"]="24" ["11,IF"]="3"
-        ["11,FORIN"]="4" ["11,INCLUDE"]="5" ["11,BUILTIN"]="6" ["11,VAR"]="7"
-        ["11,STR"]="8" ["11,BOOLS"]="16" ["11,BOOLO"]="17" ["11,UOP"]="18"
-        ["11,BOOLA"]="19" ["11,BOOL"]="22" ["11,ARGS"]="23" ["12,id"]="s 15"
-        ["12,ID"]="25" ["13,cl"]="s 26" ["14,cl"]="s 27" ["14,rd"]="s 28"
-        ["14,or"]="s 29" ["14,and"]="s 30" ["15,cl"]="r ID id" ["15,rd"]="r ID id"
-        ["15,or"]="r ID id" ["15,and"]="r ID id" ["15,in"]="r ID id" ["16,cl"]="s 31"
-        ["17,cl"]="r BOOLS BOOLO" ["17,or"]="s 32" ["17,rp"]="r BOOLS BOOLO"
-        ["18,ld"]="s 9" ["18,lp"]="s 21" ["18,ex"]="s 20" ["18,str"]="s 10"
-        ["18,STMT"]="24" ["18,IF"]="3" ["18,FORIN"]="4" ["18,INCLUDE"]="5"
-        ["18,BUILTIN"]="6" ["18,VAR"]="7" ["18,STR"]="8" ["18,BOOLS"]="33"
-        ["18,BOOLO"]="17" ["18,UOP"]="18" ["18,BOOLA"]="19" ["18,BOOL"]="22"
-        ["18,ARGS"]="23" ["19,cl"]="r BOOLO BOOLA" ["19,or"]="r BOOLO BOOLA"
-        ["19,and"]="s 34" ["19,rp"]="r BOOLO BOOLA" ["20,ld"]="r UOP ex"
-        ["20,lp"]="r UOP ex" ["20,ex"]="r UOP ex" ["20,str"]="r UOP ex" ["21,ld"]="s 9"
-        ["21,lp"]="s 21" ["21,ex"]="s 20" ["21,str"]="s 10" ["21,STMT"]="24"
-        ["21,IF"]="3" ["21,FORIN"]="4" ["21,INCLUDE"]="5" ["21,BUILTIN"]="6"
-        ["21,VAR"]="7" ["21,STR"]="8" ["21,BOOLS"]="35" ["21,BOOLO"]="17"
-        ["21,UOP"]="18" ["21,BOOLA"]="19" ["21,BOOL"]="22" ["21,ARGS"]="23"
-        ["22,cl"]="r BOOLA BOOL" ["22,or"]="r BOOLA BOOL" ["22,and"]="r BOOLA BOOL"
-        ["22,rp"]="r BOOLA BOOL" ["23,ld"]="s 9" ["23,cl"]="r BOOL ARGS"
-        ["23,or"]="r BOOL ARGS" ["23,and"]="r BOOL ARGS" ["23,rp"]="r BOOL ARGS"
-        ["23,ne"]="s 38" ["23,eq"]="s 39" ["23,gt"]="s 40" ["23,lt"]="s 41"
-        ["23,ge"]="s 42" ["23,le"]="s 43" ["23,strgt"]="s 44" ["23,strlt"]="s 45"
-        ["23,streq"]="s 46" ["23,strne"]="s 47" ["23,str"]="s 10" ["23,STMT"]="37"
-        ["23,IF"]="3" ["23,FORIN"]="4" ["23,INCLUDE"]="5" ["23,BUILTIN"]="6"
-        ["23,VAR"]="7" ["23,STR"]="8" ["23,BOP"]="36" ["24,ld"]="r ARGS STMT"
-        ["24,cl"]="r ARGS STMT" ["24,rd"]="r ARGS STMT" ["24,or"]="r ARGS STMT"
-        ["24,and"]="r ARGS STMT" ["24,rp"]="r ARGS STMT" ["24,ne"]="r ARGS STMT"
-        ["24,eq"]="r ARGS STMT" ["24,gt"]="r ARGS STMT" ["24,lt"]="r ARGS STMT"
-        ["24,ge"]="r ARGS STMT" ["24,le"]="r ARGS STMT" ["24,strgt"]="r ARGS STMT"
-        ["24,strlt"]="r ARGS STMT" ["24,streq"]="r ARGS STMT" ["24,strne"]="r ARGS STMT"
-        ["24,str"]="r ARGS STMT" ["25,in"]="s 48" ["26,str"]="s 10" ["26,STR"]="49"
-        ["27,ld"]="s 9" ["27,str"]="s 10" ["27,STMT"]="24" ["27,IF"]="3"
-        ["27,FORIN"]="4" ["27,INCLUDE"]="5" ["27,BUILTIN"]="6" ["27,VAR"]="7"
-        ["27,STR"]="8" ["27,ARGS"]="50" ["28,ld"]="r VAR ld ID rd"
-        ["28,cl"]="r VAR ld ID rd" ["28,rd"]="r VAR ld ID rd"
-        ["28,elif"]="r VAR ld ID rd" ["28,else"]="r VAR ld ID rd"
-        ["28,or"]="r VAR ld ID rd" ["28,and"]="r VAR ld ID rd"
-        ["28,rp"]="r VAR ld ID rd" ["28,ne"]="r VAR ld ID rd" ["28,eq"]="r VAR ld ID rd"
-        ["28,gt"]="r VAR ld ID rd" ["28,lt"]="r VAR ld ID rd" ["28,ge"]="r VAR ld ID rd"
-        ["28,le"]="r VAR ld ID rd" ["28,strgt"]="r VAR ld ID rd"
-        ["28,strlt"]="r VAR ld ID rd" ["28,streq"]="r VAR ld ID rd"
-        ["28,strne"]="r VAR ld ID rd" ["28,str"]="r VAR ld ID rd"
-        ["28,$"]="r VAR ld ID rd" ["29,ld"]="s 53" ["29,str"]="s 10" ["29,VAR"]="51"
-        ["29,STR"]="52" ["30,ld"]="s 53" ["30,str"]="s 10" ["30,VAR"]="54"
-        ["30,STR"]="55" ["31,ld"]="r DOC" ["31,rd"]="r DOC" ["31,elif"]="r DOC"
-        ["31,else"]="r DOC" ["31,str"]="r DOC" ["31,DOC"]="56" ["32,ld"]="s 9"
-        ["32,lp"]="s 21" ["32,ex"]="s 20" ["32,str"]="s 10" ["32,STMT"]="24"
-        ["32,IF"]="3" ["32,FORIN"]="4" ["32,INCLUDE"]="5" ["32,BUILTIN"]="6"
-        ["32,VAR"]="7" ["32,STR"]="8" ["32,UOP"]="58" ["32,BOOLA"]="57" ["32,BOOL"]="22"
-        ["32,ARGS"]="23" ["33,cl"]="r BOOLS UOP BOOLS" ["33,rp"]="r BOOLS UOP BOOLS"
-        ["34,ld"]="s 9" ["34,lp"]="s 61" ["34,ex"]="s 20" ["34,str"]="s 10"
-        ["34,STMT"]="24" ["34,IF"]="3" ["34,FORIN"]="4" ["34,INCLUDE"]="5"
-        ["34,BUILTIN"]="6" ["34,VAR"]="7" ["34,STR"]="8" ["34,UOP"]="60"
-        ["34,BOOL"]="59" ["34,ARGS"]="23" ["35,rp"]="s 62" ["36,ld"]="s 9"
-        ["36,str"]="s 10" ["36,STMT"]="24" ["36,IF"]="3" ["36,FORIN"]="4"
-        ["36,INCLUDE"]="5" ["36,BUILTIN"]="6" ["36,VAR"]="7" ["36,STR"]="8"
-        ["36,ARGS"]="63" ["37,ld"]="r ARGS ARGS STMT" ["37,cl"]="r ARGS ARGS STMT"
-        ["37,rd"]="r ARGS ARGS STMT" ["37,or"]="r ARGS ARGS STMT"
-        ["37,and"]="r ARGS ARGS STMT" ["37,rp"]="r ARGS ARGS STMT"
-        ["37,ne"]="r ARGS ARGS STMT" ["37,eq"]="r ARGS ARGS STMT"
-        ["37,gt"]="r ARGS ARGS STMT" ["37,lt"]="r ARGS ARGS STMT"
-        ["37,ge"]="r ARGS ARGS STMT" ["37,le"]="r ARGS ARGS STMT"
-        ["37,strgt"]="r ARGS ARGS STMT" ["37,strlt"]="r ARGS ARGS STMT"
-        ["37,streq"]="r ARGS ARGS STMT" ["37,strne"]="r ARGS ARGS STMT"
-        ["37,str"]="r ARGS ARGS STMT" ["38,ld"]="r BOP ne" ["38,str"]="r BOP ne"
-        ["39,ld"]="r BOP eq" ["39,str"]="r BOP eq" ["40,ld"]="r BOP gt"
-        ["40,str"]="r BOP gt" ["41,ld"]="r BOP lt" ["41,str"]="r BOP lt"
-        ["42,ld"]="r BOP ge" ["42,str"]="r BOP ge" ["43,ld"]="r BOP le"
-        ["43,str"]="r BOP le" ["44,ld"]="r BOP strgt" ["44,str"]="r BOP strgt"
-        ["45,ld"]="r BOP strlt" ["45,str"]="r BOP strlt" ["46,ld"]="r BOP streq"
-        ["46,str"]="r BOP streq" ["47,ld"]="r BOP strne" ["47,str"]="r BOP strne"
-        ["48,ld"]="s 9" ["48,str"]="s 10" ["48,STMT"]="24" ["48,IF"]="3"
-        ["48,FORIN"]="4" ["48,INCLUDE"]="5" ["48,BUILTIN"]="6" ["48,VAR"]="7"
-        ["48,STR"]="8" ["48,ARGS"]="64" ["49,rd"]="s 65" ["50,ld"]="s 9"
-        ["50,rd"]="s 66" ["50,str"]="s 10" ["50,STMT"]="37" ["50,IF"]="3"
-        ["50,FORIN"]="4" ["50,INCLUDE"]="5" ["50,BUILTIN"]="6" ["50,VAR"]="7"
-        ["50,STR"]="8" ["51,rd"]="s 67" ["52,rd"]="s 68" ["53,id"]="s 15" ["53,ID"]="69"
-        ["54,rd"]="s 70" ["55,rd"]="s 71" ["56,ld"]="s 9" ["56,rd"]="r ELIF"
-        ["56,elif"]="r ELIF" ["56,else"]="r ELIF" ["56,str"]="s 10" ["56,STMT"]="2"
-        ["56,IF"]="3" ["56,FORIN"]="4" ["56,INCLUDE"]="5" ["56,BUILTIN"]="6"
-        ["56,VAR"]="7" ["56,STR"]="8" ["56,ELIF"]="72"
-        ["57,cl"]="r BOOLO BOOLO or BOOLA" ["57,or"]="r BOOLO BOOLO or BOOLA"
-        ["57,and"]="s 34" ["57,rp"]="r BOOLO BOOLO or BOOLA" ["58,ld"]="s 9"
-        ["58,lp"]="s 21" ["58,str"]="s 10" ["58,STMT"]="24" ["58,IF"]="3"
-        ["58,FORIN"]="4" ["58,INCLUDE"]="5" ["58,BUILTIN"]="6" ["58,VAR"]="7"
-        ["58,STR"]="8" ["58,BOOLA"]="73" ["58,BOOL"]="22" ["58,ARGS"]="23"
-        ["59,cl"]="r BOOLA BOOLA and BOOL" ["59,or"]="r BOOLA BOOLA and BOOL"
-        ["59,and"]="r BOOLA BOOLA and BOOL" ["59,rp"]="r BOOLA BOOLA and BOOL"
-        ["60,ld"]="s 9" ["60,lp"]="s 75" ["60,str"]="s 10" ["60,STMT"]="24"
-        ["60,IF"]="3" ["60,FORIN"]="4" ["60,INCLUDE"]="5" ["60,BUILTIN"]="6"
-        ["60,VAR"]="7" ["60,STR"]="8" ["60,BOOL"]="74" ["60,ARGS"]="23" ["61,ld"]="s 9"
-        ["61,lp"]="s 21" ["61,ex"]="s 20" ["61,str"]="s 10" ["61,STMT"]="24"
-        ["61,IF"]="3" ["61,FORIN"]="4" ["61,INCLUDE"]="5" ["61,BUILTIN"]="6"
-        ["61,VAR"]="7" ["61,STR"]="8" ["61,BOOLS"]="76" ["61,BOOLO"]="17"
-        ["61,UOP"]="18" ["61,BOOLA"]="19" ["61,BOOL"]="22" ["61,ARGS"]="23"
-        ["62,cl"]="r BOOLA lp BOOLS rp" ["62,or"]="r BOOLA lp BOOLS rp"
-        ["62,and"]="r BOOLA lp BOOLS rp" ["62,rp"]="r BOOLA lp BOOLS rp" ["63,ld"]="s 9"
-        ["63,cl"]="r BOOL ARGS BOP ARGS" ["63,or"]="r BOOL ARGS BOP ARGS"
-        ["63,and"]="r BOOL ARGS BOP ARGS" ["63,rp"]="r BOOL ARGS BOP ARGS"
-        ["63,str"]="s 10" ["63,STMT"]="37" ["63,IF"]="3" ["63,FORIN"]="4"
-        ["63,INCLUDE"]="5" ["63,BUILTIN"]="6" ["63,VAR"]="7" ["63,STR"]="8"
-        ["64,ld"]="s 9" ["64,cl"]="s 77" ["64,str"]="s 10" ["64,STMT"]="37"
-        ["64,IF"]="3" ["64,FORIN"]="4" ["64,INCLUDE"]="5" ["64,BUILTIN"]="6"
-        ["64,VAR"]="7" ["64,STR"]="8" ["65,ld"]="r INCLUDE ld include cl STR rd"
-        ["65,cl"]="r INCLUDE ld include cl STR rd"
-        ["65,rd"]="r INCLUDE ld include cl STR rd"
-        ["65,elif"]="r INCLUDE ld include cl STR rd"
-        ["65,else"]="r INCLUDE ld include cl STR rd"
-        ["65,or"]="r INCLUDE ld include cl STR rd"
-        ["65,and"]="r INCLUDE ld include cl STR rd"
-        ["65,rp"]="r INCLUDE ld include cl STR rd"
-        ["65,ne"]="r INCLUDE ld include cl STR rd"
-        ["65,eq"]="r INCLUDE ld include cl STR rd"
-        ["65,gt"]="r INCLUDE ld include cl STR rd"
-        ["65,lt"]="r INCLUDE ld include cl STR rd"
-        ["65,ge"]="r INCLUDE ld include cl STR rd"
-        ["65,le"]="r INCLUDE ld include cl STR rd"
-        ["65,strgt"]="r INCLUDE ld include cl STR rd"
-        ["65,strlt"]="r INCLUDE ld include cl STR rd"
-        ["65,streq"]="r INCLUDE ld include cl STR rd"
-        ["65,strne"]="r INCLUDE ld include cl STR rd"
-        ["65,str"]="r INCLUDE ld include cl STR rd"
-        ["65,$"]="r INCLUDE ld include cl STR rd" ["66,ld"]="r BUILTIN ld ID cl ARGS rd"
-        ["66,cl"]="r BUILTIN ld ID cl ARGS rd" ["66,rd"]="r BUILTIN ld ID cl ARGS rd"
-        ["66,elif"]="r BUILTIN ld ID cl ARGS rd"
-        ["66,else"]="r BUILTIN ld ID cl ARGS rd" ["66,or"]="r BUILTIN ld ID cl ARGS rd"
-        ["66,and"]="r BUILTIN ld ID cl ARGS rd" ["66,rp"]="r BUILTIN ld ID cl ARGS rd"
-        ["66,ne"]="r BUILTIN ld ID cl ARGS rd" ["66,eq"]="r BUILTIN ld ID cl ARGS rd"
-        ["66,gt"]="r BUILTIN ld ID cl ARGS rd" ["66,lt"]="r BUILTIN ld ID cl ARGS rd"
-        ["66,ge"]="r BUILTIN ld ID cl ARGS rd" ["66,le"]="r BUILTIN ld ID cl ARGS rd"
-        ["66,strgt"]="r BUILTIN ld ID cl ARGS rd"
-        ["66,strlt"]="r BUILTIN ld ID cl ARGS rd"
-        ["66,streq"]="r BUILTIN ld ID cl ARGS rd"
-        ["66,strne"]="r BUILTIN ld ID cl ARGS rd"
-        ["66,str"]="r BUILTIN ld ID cl ARGS rd" ["66,$"]="r BUILTIN ld ID cl ARGS rd"
-        ["67,ld"]="r VAR ld ID or VAR rd" ["67,cl"]="r VAR ld ID or VAR rd"
-        ["67,rd"]="r VAR ld ID or VAR rd" ["67,elif"]="r VAR ld ID or VAR rd"
-        ["67,else"]="r VAR ld ID or VAR rd" ["67,or"]="r VAR ld ID or VAR rd"
-        ["67,and"]="r VAR ld ID or VAR rd" ["67,rp"]="r VAR ld ID or VAR rd"
-        ["67,ne"]="r VAR ld ID or VAR rd" ["67,eq"]="r VAR ld ID or VAR rd"
-        ["67,gt"]="r VAR ld ID or VAR rd" ["67,lt"]="r VAR ld ID or VAR rd"
-        ["67,ge"]="r VAR ld ID or VAR rd" ["67,le"]="r VAR ld ID or VAR rd"
-        ["67,strgt"]="r VAR ld ID or VAR rd" ["67,strlt"]="r VAR ld ID or VAR rd"
-        ["67,streq"]="r VAR ld ID or VAR rd" ["67,strne"]="r VAR ld ID or VAR rd"
-        ["67,str"]="r VAR ld ID or VAR rd" ["67,$"]="r VAR ld ID or VAR rd"
-        ["68,ld"]="r VAR ld ID or STR rd" ["68,cl"]="r VAR ld ID or STR rd"
-        ["68,rd"]="r VAR ld ID or STR rd" ["68,elif"]="r VAR ld ID or STR rd"
-        ["68,else"]="r VAR ld ID or STR rd" ["68,or"]="r VAR ld ID or STR rd"
-        ["68,and"]="r VAR ld ID or STR rd" ["68,rp"]="r VAR ld ID or STR rd"
-        ["68,ne"]="r VAR ld ID or STR rd" ["68,eq"]="r VAR ld ID or STR rd"
-        ["68,gt"]="r VAR ld ID or STR rd" ["68,lt"]="r VAR ld ID or STR rd"
-        ["68,ge"]="r VAR ld ID or STR rd" ["68,le"]="r VAR ld ID or STR rd"
-        ["68,strgt"]="r VAR ld ID or STR rd" ["68,strlt"]="r VAR ld ID or STR rd"
-        ["68,streq"]="r VAR ld ID or STR rd" ["68,strne"]="r VAR ld ID or STR rd"
-        ["68,str"]="r VAR ld ID or STR rd" ["68,$"]="r VAR ld ID or STR rd"
-        ["69,rd"]="s 28" ["69,or"]="s 29" ["69,and"]="s 30"
-        ["70,ld"]="r VAR ld ID and VAR rd" ["70,cl"]="r VAR ld ID and VAR rd"
-        ["70,rd"]="r VAR ld ID and VAR rd" ["70,elif"]="r VAR ld ID and VAR rd"
-        ["70,else"]="r VAR ld ID and VAR rd" ["70,or"]="r VAR ld ID and VAR rd"
-        ["70,and"]="r VAR ld ID and VAR rd" ["70,rp"]="r VAR ld ID and VAR rd"
-        ["70,ne"]="r VAR ld ID and VAR rd" ["70,eq"]="r VAR ld ID and VAR rd"
-        ["70,gt"]="r VAR ld ID and VAR rd" ["70,lt"]="r VAR ld ID and VAR rd"
-        ["70,ge"]="r VAR ld ID and VAR rd" ["70,le"]="r VAR ld ID and VAR rd"
-        ["70,strgt"]="r VAR ld ID and VAR rd" ["70,strlt"]="r VAR ld ID and VAR rd"
-        ["70,streq"]="r VAR ld ID and VAR rd" ["70,strne"]="r VAR ld ID and VAR rd"
-        ["70,str"]="r VAR ld ID and VAR rd" ["70,$"]="r VAR ld ID and VAR rd"
-        ["71,ld"]="r VAR ld ID and STR rd" ["71,cl"]="r VAR ld ID and STR rd"
-        ["71,rd"]="r VAR ld ID and STR rd" ["71,elif"]="r VAR ld ID and STR rd"
-        ["71,else"]="r VAR ld ID and STR rd" ["71,or"]="r VAR ld ID and STR rd"
-        ["71,and"]="r VAR ld ID and STR rd" ["71,rp"]="r VAR ld ID and STR rd"
-        ["71,ne"]="r VAR ld ID and STR rd" ["71,eq"]="r VAR ld ID and STR rd"
-        ["71,gt"]="r VAR ld ID and STR rd" ["71,lt"]="r VAR ld ID and STR rd"
-        ["71,ge"]="r VAR ld ID and STR rd" ["71,le"]="r VAR ld ID and STR rd"
-        ["71,strgt"]="r VAR ld ID and STR rd" ["71,strlt"]="r VAR ld ID and STR rd"
-        ["71,streq"]="r VAR ld ID and STR rd" ["71,strne"]="r VAR ld ID and STR rd"
-        ["71,str"]="r VAR ld ID and STR rd" ["71,$"]="r VAR ld ID and STR rd"
-        ["72,rd"]="r ELSE" ["72,elif"]="s 79" ["72,else"]="s 80" ["72,ELSE"]="78"
-        ["73,cl"]="r BOOLO BOOLO or UOP BOOLA" ["73,or"]="r BOOLO BOOLO or UOP BOOLA"
-        ["73,and"]="s 34" ["73,rp"]="r BOOLO BOOLO or UOP BOOLA"
-        ["74,cl"]="r BOOLA BOOLA and UOP BOOL" ["74,or"]="r BOOLA BOOLA and UOP BOOL"
-        ["74,and"]="r BOOLA BOOLA and UOP BOOL" ["74,rp"]="r BOOLA BOOLA and UOP BOOL"
-        ["75,ld"]="s 9" ["75,lp"]="s 21" ["75,ex"]="s 20" ["75,str"]="s 10"
-        ["75,STMT"]="24" ["75,IF"]="3" ["75,FORIN"]="4" ["75,INCLUDE"]="5"
-        ["75,BUILTIN"]="6" ["75,VAR"]="7" ["75,STR"]="8" ["75,BOOLS"]="81"
-        ["75,BOOLO"]="17" ["75,UOP"]="18" ["75,BOOLA"]="19" ["75,BOOL"]="22"
-        ["75,ARGS"]="23" ["76,rp"]="s 82" ["77,ld"]="r DOC" ["77,rd"]="r DOC"
-        ["77,str"]="r DOC" ["77,DOC"]="83" ["78,rd"]="s 84" ["79,ld"]="s 9"
-        ["79,lp"]="s 21" ["79,ex"]="s 20" ["79,str"]="s 10" ["79,STMT"]="24"
-        ["79,IF"]="3" ["79,FORIN"]="4" ["79,INCLUDE"]="5" ["79,BUILTIN"]="6"
-        ["79,VAR"]="7" ["79,STR"]="8" ["79,BOOLS"]="85" ["79,BOOLO"]="17"
-        ["79,UOP"]="18" ["79,BOOLA"]="19" ["79,BOOL"]="22" ["79,ARGS"]="23"
-        ["80,cl"]="s 86" ["81,rp"]="s 87" ["82,cl"]="r BOOLA BOOLA and lp BOOLS rp"
-        ["82,or"]="r BOOLA BOOLA and lp BOOLS rp"
-        ["82,and"]="r BOOLA BOOLA and lp BOOLS rp"
-        ["82,rp"]="r BOOLA BOOLA and lp BOOLS rp" ["83,ld"]="s 9" ["83,rd"]="s 88"
-        ["83,str"]="s 10" ["83,STMT"]="2" ["83,IF"]="3" ["83,FORIN"]="4"
-        ["83,INCLUDE"]="5" ["83,BUILTIN"]="6" ["83,VAR"]="7" ["83,STR"]="8"
-        ["84,ld"]="r IF ld if BOOLS cl DOC ELIF ELSE rd"
-        ["84,cl"]="r IF ld if BOOLS cl DOC ELIF ELSE rd"
-        ["84,rd"]="r IF ld if BOOLS cl DOC ELIF ELSE rd"
-        ["84,elif"]="r IF ld if BOOLS cl DOC ELIF ELSE rd"
-        ["84,else"]="r IF ld if BOOLS cl DOC ELIF ELSE rd"
-        ["84,or"]="r IF ld if BOOLS cl DOC ELIF ELSE rd"
-        ["84,and"]="r IF ld if BOOLS cl DOC ELIF ELSE rd"
-        ["84,rp"]="r IF ld if BOOLS cl DOC ELIF ELSE rd"
-        ["84,ne"]="r IF ld if BOOLS cl DOC ELIF ELSE rd"
-        ["84,eq"]="r IF ld if BOOLS cl DOC ELIF ELSE rd"
-        ["84,gt"]="r IF ld if BOOLS cl DOC ELIF ELSE rd"
-        ["84,lt"]="r IF ld if BOOLS cl DOC ELIF ELSE rd"
-        ["84,ge"]="r IF ld if BOOLS cl DOC ELIF ELSE rd"
-        ["84,le"]="r IF ld if BOOLS cl DOC ELIF ELSE rd"
-        ["84,strgt"]="r IF ld if BOOLS cl DOC ELIF ELSE rd"
-        ["84,strlt"]="r IF ld if BOOLS cl DOC ELIF ELSE rd"
-        ["84,streq"]="r IF ld if BOOLS cl DOC ELIF ELSE rd"
-        ["84,strne"]="r IF ld if BOOLS cl DOC ELIF ELSE rd"
-        ["84,str"]="r IF ld if BOOLS cl DOC ELIF ELSE rd"
-        ["84,$"]="r IF ld if BOOLS cl DOC ELIF ELSE rd" ["85,cl"]="s 89"
-        ["86,ld"]="r DOC" ["86,rd"]="r DOC" ["86,str"]="r DOC" ["86,DOC"]="90"
-        ["87,cl"]="r BOOLA BOOLA and UOP lp BOOLS rp"
-        ["87,or"]="r BOOLA BOOLA and UOP lp BOOLS rp"
-        ["87,and"]="r BOOLA BOOLA and UOP lp BOOLS rp"
-        ["87,rp"]="r BOOLA BOOLA and UOP lp BOOLS rp"
-        ["88,ld"]="r FORIN ld for ID in ARGS cl DOC rd"
-        ["88,cl"]="r FORIN ld for ID in ARGS cl DOC rd"
-        ["88,rd"]="r FORIN ld for ID in ARGS cl DOC rd"
-        ["88,elif"]="r FORIN ld for ID in ARGS cl DOC rd"
-        ["88,else"]="r FORIN ld for ID in ARGS cl DOC rd"
-        ["88,or"]="r FORIN ld for ID in ARGS cl DOC rd"
-        ["88,and"]="r FORIN ld for ID in ARGS cl DOC rd"
-        ["88,rp"]="r FORIN ld for ID in ARGS cl DOC rd"
-        ["88,ne"]="r FORIN ld for ID in ARGS cl DOC rd"
-        ["88,eq"]="r FORIN ld for ID in ARGS cl DOC rd"
-        ["88,gt"]="r FORIN ld for ID in ARGS cl DOC rd"
-        ["88,lt"]="r FORIN ld for ID in ARGS cl DOC rd"
-        ["88,ge"]="r FORIN ld for ID in ARGS cl DOC rd"
-        ["88,le"]="r FORIN ld for ID in ARGS cl DOC rd"
-        ["88,strgt"]="r FORIN ld for ID in ARGS cl DOC rd"
-        ["88,strlt"]="r FORIN ld for ID in ARGS cl DOC rd"
-        ["88,streq"]="r FORIN ld for ID in ARGS cl DOC rd"
-        ["88,strne"]="r FORIN ld for ID in ARGS cl DOC rd"
-        ["88,str"]="r FORIN ld for ID in ARGS cl DOC rd"
-        ["88,$"]="r FORIN ld for ID in ARGS cl DOC rd" ["89,ld"]="r DOC"
-        ["89,rd"]="r DOC" ["89,elif"]="r DOC" ["89,else"]="r DOC" ["89,str"]="r DOC"
-        ["89,DOC"]="91" ["90,ld"]="s 9" ["90,rd"]="r ELSE else cl DOC" ["90,str"]="s 10"
-        ["90,STMT"]="2" ["90,IF"]="3" ["90,FORIN"]="4" ["90,INCLUDE"]="5"
-        ["90,BUILTIN"]="6" ["90,VAR"]="7" ["90,STR"]="8" ["91,ld"]="s 9"
-        ["91,rd"]="r ELIF ELIF elif BOOLS cl DOC"
-        ["91,elif"]="r ELIF ELIF elif BOOLS cl DOC"
-        ["91,else"]="r ELIF ELIF elif BOOLS cl DOC" ["91,str"]="s 10" ["91,STMT"]="2"
-        ["91,IF"]="3" ["91,FORIN"]="4" ["91,INCLUDE"]="5" ["91,BUILTIN"]="6"
-        ["91,VAR"]="7" ["91,STR"]="8"
-    ) # }}}
-    # <<< BPT_PARSE_TABLE_E <<<
-
     # Deduplication function for collect-{var,include}
-    bpt.__dedup() { echo "$1" | sort | uniq; }
+    bpt.__dedup() { echo -n "$1" | sort | uniq; }
 
     # Append this if reducer is bpt.__reduce_generate
     local HEADER=''
     [[ $reduce_fn != bpt.__reduce_generate ]] || {
         read -r -d '' HEADER <<-'EOF'
 #!/bin/bash
-e(){ local OIFS="$IFS"; IFS=; echo -n "$*"; IFS="$OIFS"; };
-len(){ echo -n "${#1}"; };
-seq(){ command seq -s ' ' -- "$@"; };
+\unset -f echo printf || true
+e(){ printf '%s' "$@"; };
+len(){ e "${#1}"; };
+seq(){ command seq -s ' ' -- "$@" || kill $__BPT_BASHPID; };
+split(){ e "$*"; };
 EOF
+        HEADER+=$'\n'
     }
 
     # Execute command
@@ -1219,8 +922,428 @@ EOF
     scan) bpt.scan "$ld" "$rd" <"$infile" ;;
     fingerprint) bpt.fingerprint "$ld" "$rd" "$infile" "$debug" ;;
     *) result="$(bpt.process "$ld" "$rd" "$reduce_fn" "$infile" "$debug")" &&
-        $post_process "$HEADER$result" ;;
+        (__BPT_BASHPID=$BASHPID && $post_process "$HEADER$result" || return $?) ;;
     esac
 )
 
-(return 0 2>/dev/null) || bpt.main "$@"
+# shellcheck disable=SC2034
+# >>> BPT_PARSE_TABLE_S >>>
+readonly -A __BPT_PARSE_TABLE=( # {{{
+    ["0,ld"]="r DOC" ["0,str"]="r DOC" ["0,$"]="r DOC" ["0,DOC"]="1" ["1,ld"]="s 10"
+    ["1,str"]="s 11" ["1,$"]="a" ["1,STMT"]="2" ["1,IF"]="3" ["1,FORIN"]="4"
+    ["1,INCLUDE"]="5" ["1,BUILTIN"]="6" ["1,QUOTE"]="7" ["1,VAR"]="8" ["1,STR"]="9"
+    ["2,ld"]="r DOC DOC STMT" ["2,cl"]="r DOC DOC STMT" ["2,rd"]="r DOC DOC STMT"
+    ["2,elif"]="r DOC DOC STMT" ["2,else"]="r DOC DOC STMT"
+    ["2,str"]="r DOC DOC STMT" ["2,$"]="r DOC DOC STMT" ["3,ld"]="r STMT IF"
+    ["3,cl"]="r STMT IF" ["3,rd"]="r STMT IF" ["3,elif"]="r STMT IF"
+    ["3,else"]="r STMT IF" ["3,or"]="r STMT IF" ["3,and"]="r STMT IF"
+    ["3,rp"]="r STMT IF" ["3,ne"]="r STMT IF" ["3,eq"]="r STMT IF"
+    ["3,gt"]="r STMT IF" ["3,lt"]="r STMT IF" ["3,ge"]="r STMT IF"
+    ["3,le"]="r STMT IF" ["3,strne"]="r STMT IF" ["3,streq"]="r STMT IF"
+    ["3,strgt"]="r STMT IF" ["3,strlt"]="r STMT IF" ["3,strcm"]="r STMT IF"
+    ["3,str"]="r STMT IF" ["3,$"]="r STMT IF" ["4,ld"]="r STMT FORIN"
+    ["4,cl"]="r STMT FORIN" ["4,rd"]="r STMT FORIN" ["4,elif"]="r STMT FORIN"
+    ["4,else"]="r STMT FORIN" ["4,or"]="r STMT FORIN" ["4,and"]="r STMT FORIN"
+    ["4,rp"]="r STMT FORIN" ["4,ne"]="r STMT FORIN" ["4,eq"]="r STMT FORIN"
+    ["4,gt"]="r STMT FORIN" ["4,lt"]="r STMT FORIN" ["4,ge"]="r STMT FORIN"
+    ["4,le"]="r STMT FORIN" ["4,strne"]="r STMT FORIN" ["4,streq"]="r STMT FORIN"
+    ["4,strgt"]="r STMT FORIN" ["4,strlt"]="r STMT FORIN" ["4,strcm"]="r STMT FORIN"
+    ["4,str"]="r STMT FORIN" ["4,$"]="r STMT FORIN" ["5,ld"]="r STMT INCLUDE"
+    ["5,cl"]="r STMT INCLUDE" ["5,rd"]="r STMT INCLUDE" ["5,elif"]="r STMT INCLUDE"
+    ["5,else"]="r STMT INCLUDE" ["5,or"]="r STMT INCLUDE" ["5,and"]="r STMT INCLUDE"
+    ["5,rp"]="r STMT INCLUDE" ["5,ne"]="r STMT INCLUDE" ["5,eq"]="r STMT INCLUDE"
+    ["5,gt"]="r STMT INCLUDE" ["5,lt"]="r STMT INCLUDE" ["5,ge"]="r STMT INCLUDE"
+    ["5,le"]="r STMT INCLUDE" ["5,strne"]="r STMT INCLUDE"
+    ["5,streq"]="r STMT INCLUDE" ["5,strgt"]="r STMT INCLUDE"
+    ["5,strlt"]="r STMT INCLUDE" ["5,strcm"]="r STMT INCLUDE"
+    ["5,str"]="r STMT INCLUDE" ["5,$"]="r STMT INCLUDE" ["6,ld"]="r STMT BUILTIN"
+    ["6,cl"]="r STMT BUILTIN" ["6,rd"]="r STMT BUILTIN" ["6,elif"]="r STMT BUILTIN"
+    ["6,else"]="r STMT BUILTIN" ["6,or"]="r STMT BUILTIN" ["6,and"]="r STMT BUILTIN"
+    ["6,rp"]="r STMT BUILTIN" ["6,ne"]="r STMT BUILTIN" ["6,eq"]="r STMT BUILTIN"
+    ["6,gt"]="r STMT BUILTIN" ["6,lt"]="r STMT BUILTIN" ["6,ge"]="r STMT BUILTIN"
+    ["6,le"]="r STMT BUILTIN" ["6,strne"]="r STMT BUILTIN"
+    ["6,streq"]="r STMT BUILTIN" ["6,strgt"]="r STMT BUILTIN"
+    ["6,strlt"]="r STMT BUILTIN" ["6,strcm"]="r STMT BUILTIN"
+    ["6,str"]="r STMT BUILTIN" ["6,$"]="r STMT BUILTIN" ["7,ld"]="r STMT QUOTE"
+    ["7,cl"]="r STMT QUOTE" ["7,rd"]="r STMT QUOTE" ["7,elif"]="r STMT QUOTE"
+    ["7,else"]="r STMT QUOTE" ["7,or"]="r STMT QUOTE" ["7,and"]="r STMT QUOTE"
+    ["7,rp"]="r STMT QUOTE" ["7,ne"]="r STMT QUOTE" ["7,eq"]="r STMT QUOTE"
+    ["7,gt"]="r STMT QUOTE" ["7,lt"]="r STMT QUOTE" ["7,ge"]="r STMT QUOTE"
+    ["7,le"]="r STMT QUOTE" ["7,strne"]="r STMT QUOTE" ["7,streq"]="r STMT QUOTE"
+    ["7,strgt"]="r STMT QUOTE" ["7,strlt"]="r STMT QUOTE" ["7,strcm"]="r STMT QUOTE"
+    ["7,str"]="r STMT QUOTE" ["7,$"]="r STMT QUOTE" ["8,ld"]="r STMT VAR"
+    ["8,cl"]="r STMT VAR" ["8,rd"]="r STMT VAR" ["8,elif"]="r STMT VAR"
+    ["8,else"]="r STMT VAR" ["8,or"]="r STMT VAR" ["8,and"]="r STMT VAR"
+    ["8,rp"]="r STMT VAR" ["8,ne"]="r STMT VAR" ["8,eq"]="r STMT VAR"
+    ["8,gt"]="r STMT VAR" ["8,lt"]="r STMT VAR" ["8,ge"]="r STMT VAR"
+    ["8,le"]="r STMT VAR" ["8,strne"]="r STMT VAR" ["8,streq"]="r STMT VAR"
+    ["8,strgt"]="r STMT VAR" ["8,strlt"]="r STMT VAR" ["8,strcm"]="r STMT VAR"
+    ["8,str"]="r STMT VAR" ["8,$"]="r STMT VAR" ["9,ld"]="r STMT STR"
+    ["9,cl"]="r STMT STR" ["9,rd"]="r STMT STR" ["9,elif"]="r STMT STR"
+    ["9,else"]="r STMT STR" ["9,or"]="r STMT STR" ["9,and"]="r STMT STR"
+    ["9,rp"]="r STMT STR" ["9,ne"]="r STMT STR" ["9,eq"]="r STMT STR"
+    ["9,gt"]="r STMT STR" ["9,lt"]="r STMT STR" ["9,ge"]="r STMT STR"
+    ["9,le"]="r STMT STR" ["9,strne"]="r STMT STR" ["9,streq"]="r STMT STR"
+    ["9,strgt"]="r STMT STR" ["9,strlt"]="r STMT STR" ["9,strcm"]="r STMT STR"
+    ["9,str"]="r STMT STR" ["9,$"]="r STMT STR" ["10,ld"]="s 10" ["10,if"]="s 12"
+    ["10,lp"]="s 23" ["10,for"]="s 14" ["10,include"]="s 15" ["10,quote"]="s 17"
+    ["10,ex"]="s 22" ["10,id"]="s 20" ["10,str"]="s 11" ["10,STMT"]="26"
+    ["10,IF"]="3" ["10,FORIN"]="4" ["10,INCLUDE"]="5" ["10,BUILTIN"]="6"
+    ["10,QUOTE"]="7" ["10,VAR"]="8" ["10,STR"]="9" ["10,BOOLS"]="13"
+    ["10,BOOLO"]="18" ["10,UOP"]="19" ["10,BOOLA"]="21" ["10,BOOL"]="24"
+    ["10,ARGS"]="25" ["10,ID"]="16" ["11,ld"]="r STR str" ["11,cl"]="r STR str"
+    ["11,rd"]="r STR str" ["11,elif"]="r STR str" ["11,else"]="r STR str"
+    ["11,or"]="r STR str" ["11,and"]="r STR str" ["11,rp"]="r STR str"
+    ["11,ne"]="r STR str" ["11,eq"]="r STR str" ["11,gt"]="r STR str"
+    ["11,lt"]="r STR str" ["11,ge"]="r STR str" ["11,le"]="r STR str"
+    ["11,strne"]="r STR str" ["11,streq"]="r STR str" ["11,strgt"]="r STR str"
+    ["11,strlt"]="r STR str" ["11,strcm"]="r STR str" ["11,str"]="r STR str"
+    ["11,$"]="r STR str" ["12,ld"]="s 10" ["12,lp"]="s 23" ["12,ex"]="s 22"
+    ["12,str"]="s 11" ["12,STMT"]="26" ["12,IF"]="3" ["12,FORIN"]="4"
+    ["12,INCLUDE"]="5" ["12,BUILTIN"]="6" ["12,QUOTE"]="7" ["12,VAR"]="8"
+    ["12,STR"]="9" ["12,BOOLS"]="27" ["12,BOOLO"]="18" ["12,UOP"]="19"
+    ["12,BOOLA"]="21" ["12,BOOL"]="24" ["12,ARGS"]="25" ["13,cl"]="s 28"
+    ["13,rd"]="s 29" ["14,id"]="s 20" ["14,ID"]="30" ["15,cl"]="s 31"
+    ["16,cl"]="s 32" ["16,rd"]="s 33" ["16,or"]="s 34" ["16,and"]="s 35"
+    ["17,cl"]="s 36" ["18,cl"]="r BOOLS BOOLO" ["18,rd"]="r BOOLS BOOLO"
+    ["18,or"]="s 37" ["18,rp"]="r BOOLS BOOLO" ["19,ld"]="s 10" ["19,lp"]="s 23"
+    ["19,ex"]="s 22" ["19,str"]="s 11" ["19,STMT"]="26" ["19,IF"]="3"
+    ["19,FORIN"]="4" ["19,INCLUDE"]="5" ["19,BUILTIN"]="6" ["19,QUOTE"]="7"
+    ["19,VAR"]="8" ["19,STR"]="9" ["19,BOOLS"]="38" ["19,BOOLO"]="18"
+    ["19,UOP"]="19" ["19,BOOLA"]="21" ["19,BOOL"]="24" ["19,ARGS"]="25"
+    ["20,cl"]="r ID id" ["20,rd"]="r ID id" ["20,or"]="r ID id" ["20,and"]="r ID id"
+    ["20,in"]="r ID id" ["21,cl"]="r BOOLO BOOLA" ["21,rd"]="r BOOLO BOOLA"
+    ["21,or"]="r BOOLO BOOLA" ["21,and"]="s 39" ["21,rp"]="r BOOLO BOOLA"
+    ["22,ld"]="r UOP ex" ["22,lp"]="r UOP ex" ["22,ex"]="r UOP ex"
+    ["22,str"]="r UOP ex" ["23,ld"]="s 10" ["23,lp"]="s 23" ["23,ex"]="s 22"
+    ["23,str"]="s 11" ["23,STMT"]="26" ["23,IF"]="3" ["23,FORIN"]="4"
+    ["23,INCLUDE"]="5" ["23,BUILTIN"]="6" ["23,QUOTE"]="7" ["23,VAR"]="8"
+    ["23,STR"]="9" ["23,BOOLS"]="40" ["23,BOOLO"]="18" ["23,UOP"]="19"
+    ["23,BOOLA"]="21" ["23,BOOL"]="24" ["23,ARGS"]="25" ["24,cl"]="r BOOLA BOOL"
+    ["24,rd"]="r BOOLA BOOL" ["24,or"]="r BOOLA BOOL" ["24,and"]="r BOOLA BOOL"
+    ["24,rp"]="r BOOLA BOOL" ["25,ld"]="s 10" ["25,cl"]="r BOOL ARGS"
+    ["25,rd"]="r BOOL ARGS" ["25,or"]="r BOOL ARGS" ["25,and"]="r BOOL ARGS"
+    ["25,rp"]="r BOOL ARGS" ["25,ne"]="s 43" ["25,eq"]="s 44" ["25,gt"]="s 45"
+    ["25,lt"]="s 46" ["25,ge"]="s 47" ["25,le"]="s 48" ["25,strne"]="s 49"
+    ["25,streq"]="s 50" ["25,strgt"]="s 51" ["25,strlt"]="s 52" ["25,strcm"]="s 53"
+    ["25,str"]="s 11" ["25,STMT"]="42" ["25,IF"]="3" ["25,FORIN"]="4"
+    ["25,INCLUDE"]="5" ["25,BUILTIN"]="6" ["25,QUOTE"]="7" ["25,VAR"]="8"
+    ["25,STR"]="9" ["25,BOP"]="41" ["26,ld"]="r ARGS STMT" ["26,cl"]="r ARGS STMT"
+    ["26,rd"]="r ARGS STMT" ["26,or"]="r ARGS STMT" ["26,and"]="r ARGS STMT"
+    ["26,rp"]="r ARGS STMT" ["26,ne"]="r ARGS STMT" ["26,eq"]="r ARGS STMT"
+    ["26,gt"]="r ARGS STMT" ["26,lt"]="r ARGS STMT" ["26,ge"]="r ARGS STMT"
+    ["26,le"]="r ARGS STMT" ["26,strne"]="r ARGS STMT" ["26,streq"]="r ARGS STMT"
+    ["26,strgt"]="r ARGS STMT" ["26,strlt"]="r ARGS STMT" ["26,strcm"]="r ARGS STMT"
+    ["26,str"]="r ARGS STMT" ["27,cl"]="s 54" ["28,ld"]="r DOC" ["28,cl"]="r DOC"
+    ["28,rd"]="r DOC" ["28,str"]="r DOC" ["28,DOC"]="55"
+    ["29,ld"]="r IF ld BOOLS rd" ["29,cl"]="r IF ld BOOLS rd"
+    ["29,rd"]="r IF ld BOOLS rd" ["29,elif"]="r IF ld BOOLS rd"
+    ["29,else"]="r IF ld BOOLS rd" ["29,or"]="r IF ld BOOLS rd"
+    ["29,and"]="r IF ld BOOLS rd" ["29,rp"]="r IF ld BOOLS rd"
+    ["29,ne"]="r IF ld BOOLS rd" ["29,eq"]="r IF ld BOOLS rd"
+    ["29,gt"]="r IF ld BOOLS rd" ["29,lt"]="r IF ld BOOLS rd"
+    ["29,ge"]="r IF ld BOOLS rd" ["29,le"]="r IF ld BOOLS rd"
+    ["29,strne"]="r IF ld BOOLS rd" ["29,streq"]="r IF ld BOOLS rd"
+    ["29,strgt"]="r IF ld BOOLS rd" ["29,strlt"]="r IF ld BOOLS rd"
+    ["29,strcm"]="r IF ld BOOLS rd" ["29,str"]="r IF ld BOOLS rd"
+    ["29,$"]="r IF ld BOOLS rd" ["30,in"]="s 56" ["31,str"]="s 11" ["31,STR"]="57"
+    ["32,ld"]="s 10" ["32,str"]="s 11" ["32,STMT"]="26" ["32,IF"]="3"
+    ["32,FORIN"]="4" ["32,INCLUDE"]="5" ["32,BUILTIN"]="6" ["32,QUOTE"]="7"
+    ["32,VAR"]="8" ["32,STR"]="9" ["32,ARGS"]="58" ["33,ld"]="r VAR ld ID rd"
+    ["33,cl"]="r VAR ld ID rd" ["33,rd"]="r VAR ld ID rd"
+    ["33,elif"]="r VAR ld ID rd" ["33,else"]="r VAR ld ID rd"
+    ["33,or"]="r VAR ld ID rd" ["33,and"]="r VAR ld ID rd"
+    ["33,rp"]="r VAR ld ID rd" ["33,ne"]="r VAR ld ID rd" ["33,eq"]="r VAR ld ID rd"
+    ["33,gt"]="r VAR ld ID rd" ["33,lt"]="r VAR ld ID rd" ["33,ge"]="r VAR ld ID rd"
+    ["33,le"]="r VAR ld ID rd" ["33,strne"]="r VAR ld ID rd"
+    ["33,streq"]="r VAR ld ID rd" ["33,strgt"]="r VAR ld ID rd"
+    ["33,strlt"]="r VAR ld ID rd" ["33,strcm"]="r VAR ld ID rd"
+    ["33,str"]="r VAR ld ID rd" ["33,$"]="r VAR ld ID rd" ["34,ld"]="s 61"
+    ["34,str"]="s 11" ["34,VAR"]="59" ["34,STR"]="60" ["35,ld"]="s 61"
+    ["35,str"]="s 11" ["35,VAR"]="62" ["35,STR"]="63" ["36,ld"]="s 10"
+    ["36,str"]="s 11" ["36,STMT"]="26" ["36,IF"]="3" ["36,FORIN"]="4"
+    ["36,INCLUDE"]="5" ["36,BUILTIN"]="6" ["36,QUOTE"]="7" ["36,VAR"]="8"
+    ["36,STR"]="9" ["36,ARGS"]="64" ["37,ld"]="s 10" ["37,lp"]="s 23"
+    ["37,ex"]="s 22" ["37,str"]="s 11" ["37,STMT"]="26" ["37,IF"]="3"
+    ["37,FORIN"]="4" ["37,INCLUDE"]="5" ["37,BUILTIN"]="6" ["37,QUOTE"]="7"
+    ["37,VAR"]="8" ["37,STR"]="9" ["37,UOP"]="66" ["37,BOOLA"]="65" ["37,BOOL"]="24"
+    ["37,ARGS"]="25" ["38,cl"]="r BOOLS UOP BOOLS" ["38,rd"]="r BOOLS UOP BOOLS"
+    ["38,rp"]="r BOOLS UOP BOOLS" ["39,ld"]="s 10" ["39,lp"]="s 69" ["39,ex"]="s 22"
+    ["39,str"]="s 11" ["39,STMT"]="26" ["39,IF"]="3" ["39,FORIN"]="4"
+    ["39,INCLUDE"]="5" ["39,BUILTIN"]="6" ["39,QUOTE"]="7" ["39,VAR"]="8"
+    ["39,STR"]="9" ["39,UOP"]="68" ["39,BOOL"]="67" ["39,ARGS"]="25"
+    ["40,rp"]="s 70" ["41,ld"]="s 10" ["41,str"]="s 11" ["41,STMT"]="26"
+    ["41,IF"]="3" ["41,FORIN"]="4" ["41,INCLUDE"]="5" ["41,BUILTIN"]="6"
+    ["41,QUOTE"]="7" ["41,VAR"]="8" ["41,STR"]="9" ["41,ARGS"]="71"
+    ["42,ld"]="r ARGS ARGS STMT" ["42,cl"]="r ARGS ARGS STMT"
+    ["42,rd"]="r ARGS ARGS STMT" ["42,or"]="r ARGS ARGS STMT"
+    ["42,and"]="r ARGS ARGS STMT" ["42,rp"]="r ARGS ARGS STMT"
+    ["42,ne"]="r ARGS ARGS STMT" ["42,eq"]="r ARGS ARGS STMT"
+    ["42,gt"]="r ARGS ARGS STMT" ["42,lt"]="r ARGS ARGS STMT"
+    ["42,ge"]="r ARGS ARGS STMT" ["42,le"]="r ARGS ARGS STMT"
+    ["42,strne"]="r ARGS ARGS STMT" ["42,streq"]="r ARGS ARGS STMT"
+    ["42,strgt"]="r ARGS ARGS STMT" ["42,strlt"]="r ARGS ARGS STMT"
+    ["42,strcm"]="r ARGS ARGS STMT" ["42,str"]="r ARGS ARGS STMT"
+    ["43,ld"]="r BOP ne" ["43,str"]="r BOP ne" ["44,ld"]="r BOP eq"
+    ["44,str"]="r BOP eq" ["45,ld"]="r BOP gt" ["45,str"]="r BOP gt"
+    ["46,ld"]="r BOP lt" ["46,str"]="r BOP lt" ["47,ld"]="r BOP ge"
+    ["47,str"]="r BOP ge" ["48,ld"]="r BOP le" ["48,str"]="r BOP le"
+    ["49,ld"]="r BOP strne" ["49,str"]="r BOP strne" ["50,ld"]="r BOP streq"
+    ["50,str"]="r BOP streq" ["51,ld"]="r BOP strgt" ["51,str"]="r BOP strgt"
+    ["52,ld"]="r BOP strlt" ["52,str"]="r BOP strlt" ["53,ld"]="r BOP strcm"
+    ["53,str"]="r BOP strcm" ["54,ld"]="r DOC" ["54,rd"]="r DOC" ["54,elif"]="r DOC"
+    ["54,else"]="r DOC" ["54,str"]="r DOC" ["54,DOC"]="72" ["55,ld"]="s 10"
+    ["55,cl"]="s 73" ["55,rd"]="s 74" ["55,str"]="s 11" ["55,STMT"]="2"
+    ["55,IF"]="3" ["55,FORIN"]="4" ["55,INCLUDE"]="5" ["55,BUILTIN"]="6"
+    ["55,QUOTE"]="7" ["55,VAR"]="8" ["55,STR"]="9" ["56,ld"]="s 10"
+    ["56,str"]="s 11" ["56,STMT"]="26" ["56,IF"]="3" ["56,FORIN"]="4"
+    ["56,INCLUDE"]="5" ["56,BUILTIN"]="6" ["56,QUOTE"]="7" ["56,VAR"]="8"
+    ["56,STR"]="9" ["56,ARGS"]="75" ["57,rd"]="s 76" ["58,ld"]="s 10"
+    ["58,rd"]="s 77" ["58,str"]="s 11" ["58,STMT"]="42" ["58,IF"]="3"
+    ["58,FORIN"]="4" ["58,INCLUDE"]="5" ["58,BUILTIN"]="6" ["58,QUOTE"]="7"
+    ["58,VAR"]="8" ["58,STR"]="9" ["59,rd"]="s 78" ["60,rd"]="s 79" ["61,id"]="s 20"
+    ["61,ID"]="80" ["62,rd"]="s 81" ["63,rd"]="s 82" ["64,ld"]="s 10"
+    ["64,rd"]="s 83" ["64,str"]="s 11" ["64,STMT"]="42" ["64,IF"]="3"
+    ["64,FORIN"]="4" ["64,INCLUDE"]="5" ["64,BUILTIN"]="6" ["64,QUOTE"]="7"
+    ["64,VAR"]="8" ["64,STR"]="9" ["65,cl"]="r BOOLO BOOLO or BOOLA"
+    ["65,rd"]="r BOOLO BOOLO or BOOLA" ["65,or"]="r BOOLO BOOLO or BOOLA"
+    ["65,and"]="s 39" ["65,rp"]="r BOOLO BOOLO or BOOLA" ["66,ld"]="s 10"
+    ["66,lp"]="s 23" ["66,str"]="s 11" ["66,STMT"]="26" ["66,IF"]="3"
+    ["66,FORIN"]="4" ["66,INCLUDE"]="5" ["66,BUILTIN"]="6" ["66,QUOTE"]="7"
+    ["66,VAR"]="8" ["66,STR"]="9" ["66,BOOLA"]="84" ["66,BOOL"]="24"
+    ["66,ARGS"]="25" ["67,cl"]="r BOOLA BOOLA and BOOL"
+    ["67,rd"]="r BOOLA BOOLA and BOOL" ["67,or"]="r BOOLA BOOLA and BOOL"
+    ["67,and"]="r BOOLA BOOLA and BOOL" ["67,rp"]="r BOOLA BOOLA and BOOL"
+    ["68,ld"]="s 10" ["68,lp"]="s 86" ["68,str"]="s 11" ["68,STMT"]="26"
+    ["68,IF"]="3" ["68,FORIN"]="4" ["68,INCLUDE"]="5" ["68,BUILTIN"]="6"
+    ["68,QUOTE"]="7" ["68,VAR"]="8" ["68,STR"]="9" ["68,BOOL"]="85" ["68,ARGS"]="25"
+    ["69,ld"]="s 10" ["69,lp"]="s 23" ["69,ex"]="s 22" ["69,str"]="s 11"
+    ["69,STMT"]="26" ["69,IF"]="3" ["69,FORIN"]="4" ["69,INCLUDE"]="5"
+    ["69,BUILTIN"]="6" ["69,QUOTE"]="7" ["69,VAR"]="8" ["69,STR"]="9"
+    ["69,BOOLS"]="87" ["69,BOOLO"]="18" ["69,UOP"]="19" ["69,BOOLA"]="21"
+    ["69,BOOL"]="24" ["69,ARGS"]="25" ["70,cl"]="r BOOLA lp BOOLS rp"
+    ["70,rd"]="r BOOLA lp BOOLS rp" ["70,or"]="r BOOLA lp BOOLS rp"
+    ["70,and"]="r BOOLA lp BOOLS rp" ["70,rp"]="r BOOLA lp BOOLS rp"
+    ["71,ld"]="s 10" ["71,cl"]="r BOOL ARGS BOP ARGS"
+    ["71,rd"]="r BOOL ARGS BOP ARGS" ["71,or"]="r BOOL ARGS BOP ARGS"
+    ["71,and"]="r BOOL ARGS BOP ARGS" ["71,rp"]="r BOOL ARGS BOP ARGS"
+    ["71,str"]="s 11" ["71,STMT"]="42" ["71,IF"]="3" ["71,FORIN"]="4"
+    ["71,INCLUDE"]="5" ["71,BUILTIN"]="6" ["71,QUOTE"]="7" ["71,VAR"]="8"
+    ["71,STR"]="9" ["72,ld"]="s 10" ["72,rd"]="r ELIF" ["72,elif"]="r ELIF"
+    ["72,else"]="r ELIF" ["72,str"]="s 11" ["72,STMT"]="2" ["72,IF"]="3"
+    ["72,FORIN"]="4" ["72,INCLUDE"]="5" ["72,BUILTIN"]="6" ["72,QUOTE"]="7"
+    ["72,VAR"]="8" ["72,STR"]="9" ["72,ELIF"]="88" ["73,ld"]="r DOC"
+    ["73,rd"]="r DOC" ["73,str"]="r DOC" ["73,DOC"]="89"
+    ["74,ld"]="r IF ld BOOLS cl DOC rd" ["74,cl"]="r IF ld BOOLS cl DOC rd"
+    ["74,rd"]="r IF ld BOOLS cl DOC rd" ["74,elif"]="r IF ld BOOLS cl DOC rd"
+    ["74,else"]="r IF ld BOOLS cl DOC rd" ["74,or"]="r IF ld BOOLS cl DOC rd"
+    ["74,and"]="r IF ld BOOLS cl DOC rd" ["74,rp"]="r IF ld BOOLS cl DOC rd"
+    ["74,ne"]="r IF ld BOOLS cl DOC rd" ["74,eq"]="r IF ld BOOLS cl DOC rd"
+    ["74,gt"]="r IF ld BOOLS cl DOC rd" ["74,lt"]="r IF ld BOOLS cl DOC rd"
+    ["74,ge"]="r IF ld BOOLS cl DOC rd" ["74,le"]="r IF ld BOOLS cl DOC rd"
+    ["74,strne"]="r IF ld BOOLS cl DOC rd" ["74,streq"]="r IF ld BOOLS cl DOC rd"
+    ["74,strgt"]="r IF ld BOOLS cl DOC rd" ["74,strlt"]="r IF ld BOOLS cl DOC rd"
+    ["74,strcm"]="r IF ld BOOLS cl DOC rd" ["74,str"]="r IF ld BOOLS cl DOC rd"
+    ["74,$"]="r IF ld BOOLS cl DOC rd" ["75,ld"]="s 10" ["75,cl"]="s 90"
+    ["75,str"]="s 11" ["75,STMT"]="42" ["75,IF"]="3" ["75,FORIN"]="4"
+    ["75,INCLUDE"]="5" ["75,BUILTIN"]="6" ["75,QUOTE"]="7" ["75,VAR"]="8"
+    ["75,STR"]="9" ["76,ld"]="r INCLUDE ld include cl STR rd"
+    ["76,cl"]="r INCLUDE ld include cl STR rd"
+    ["76,rd"]="r INCLUDE ld include cl STR rd"
+    ["76,elif"]="r INCLUDE ld include cl STR rd"
+    ["76,else"]="r INCLUDE ld include cl STR rd"
+    ["76,or"]="r INCLUDE ld include cl STR rd"
+    ["76,and"]="r INCLUDE ld include cl STR rd"
+    ["76,rp"]="r INCLUDE ld include cl STR rd"
+    ["76,ne"]="r INCLUDE ld include cl STR rd"
+    ["76,eq"]="r INCLUDE ld include cl STR rd"
+    ["76,gt"]="r INCLUDE ld include cl STR rd"
+    ["76,lt"]="r INCLUDE ld include cl STR rd"
+    ["76,ge"]="r INCLUDE ld include cl STR rd"
+    ["76,le"]="r INCLUDE ld include cl STR rd"
+    ["76,strne"]="r INCLUDE ld include cl STR rd"
+    ["76,streq"]="r INCLUDE ld include cl STR rd"
+    ["76,strgt"]="r INCLUDE ld include cl STR rd"
+    ["76,strlt"]="r INCLUDE ld include cl STR rd"
+    ["76,strcm"]="r INCLUDE ld include cl STR rd"
+    ["76,str"]="r INCLUDE ld include cl STR rd"
+    ["76,$"]="r INCLUDE ld include cl STR rd" ["77,ld"]="r BUILTIN ld ID cl ARGS rd"
+    ["77,cl"]="r BUILTIN ld ID cl ARGS rd" ["77,rd"]="r BUILTIN ld ID cl ARGS rd"
+    ["77,elif"]="r BUILTIN ld ID cl ARGS rd"
+    ["77,else"]="r BUILTIN ld ID cl ARGS rd" ["77,or"]="r BUILTIN ld ID cl ARGS rd"
+    ["77,and"]="r BUILTIN ld ID cl ARGS rd" ["77,rp"]="r BUILTIN ld ID cl ARGS rd"
+    ["77,ne"]="r BUILTIN ld ID cl ARGS rd" ["77,eq"]="r BUILTIN ld ID cl ARGS rd"
+    ["77,gt"]="r BUILTIN ld ID cl ARGS rd" ["77,lt"]="r BUILTIN ld ID cl ARGS rd"
+    ["77,ge"]="r BUILTIN ld ID cl ARGS rd" ["77,le"]="r BUILTIN ld ID cl ARGS rd"
+    ["77,strne"]="r BUILTIN ld ID cl ARGS rd"
+    ["77,streq"]="r BUILTIN ld ID cl ARGS rd"
+    ["77,strgt"]="r BUILTIN ld ID cl ARGS rd"
+    ["77,strlt"]="r BUILTIN ld ID cl ARGS rd"
+    ["77,strcm"]="r BUILTIN ld ID cl ARGS rd"
+    ["77,str"]="r BUILTIN ld ID cl ARGS rd" ["77,$"]="r BUILTIN ld ID cl ARGS rd"
+    ["78,ld"]="r VAR ld ID or VAR rd" ["78,cl"]="r VAR ld ID or VAR rd"
+    ["78,rd"]="r VAR ld ID or VAR rd" ["78,elif"]="r VAR ld ID or VAR rd"
+    ["78,else"]="r VAR ld ID or VAR rd" ["78,or"]="r VAR ld ID or VAR rd"
+    ["78,and"]="r VAR ld ID or VAR rd" ["78,rp"]="r VAR ld ID or VAR rd"
+    ["78,ne"]="r VAR ld ID or VAR rd" ["78,eq"]="r VAR ld ID or VAR rd"
+    ["78,gt"]="r VAR ld ID or VAR rd" ["78,lt"]="r VAR ld ID or VAR rd"
+    ["78,ge"]="r VAR ld ID or VAR rd" ["78,le"]="r VAR ld ID or VAR rd"
+    ["78,strne"]="r VAR ld ID or VAR rd" ["78,streq"]="r VAR ld ID or VAR rd"
+    ["78,strgt"]="r VAR ld ID or VAR rd" ["78,strlt"]="r VAR ld ID or VAR rd"
+    ["78,strcm"]="r VAR ld ID or VAR rd" ["78,str"]="r VAR ld ID or VAR rd"
+    ["78,$"]="r VAR ld ID or VAR rd" ["79,ld"]="r VAR ld ID or STR rd"
+    ["79,cl"]="r VAR ld ID or STR rd" ["79,rd"]="r VAR ld ID or STR rd"
+    ["79,elif"]="r VAR ld ID or STR rd" ["79,else"]="r VAR ld ID or STR rd"
+    ["79,or"]="r VAR ld ID or STR rd" ["79,and"]="r VAR ld ID or STR rd"
+    ["79,rp"]="r VAR ld ID or STR rd" ["79,ne"]="r VAR ld ID or STR rd"
+    ["79,eq"]="r VAR ld ID or STR rd" ["79,gt"]="r VAR ld ID or STR rd"
+    ["79,lt"]="r VAR ld ID or STR rd" ["79,ge"]="r VAR ld ID or STR rd"
+    ["79,le"]="r VAR ld ID or STR rd" ["79,strne"]="r VAR ld ID or STR rd"
+    ["79,streq"]="r VAR ld ID or STR rd" ["79,strgt"]="r VAR ld ID or STR rd"
+    ["79,strlt"]="r VAR ld ID or STR rd" ["79,strcm"]="r VAR ld ID or STR rd"
+    ["79,str"]="r VAR ld ID or STR rd" ["79,$"]="r VAR ld ID or STR rd"
+    ["80,rd"]="s 33" ["80,or"]="s 34" ["80,and"]="s 35"
+    ["81,ld"]="r VAR ld ID and VAR rd" ["81,cl"]="r VAR ld ID and VAR rd"
+    ["81,rd"]="r VAR ld ID and VAR rd" ["81,elif"]="r VAR ld ID and VAR rd"
+    ["81,else"]="r VAR ld ID and VAR rd" ["81,or"]="r VAR ld ID and VAR rd"
+    ["81,and"]="r VAR ld ID and VAR rd" ["81,rp"]="r VAR ld ID and VAR rd"
+    ["81,ne"]="r VAR ld ID and VAR rd" ["81,eq"]="r VAR ld ID and VAR rd"
+    ["81,gt"]="r VAR ld ID and VAR rd" ["81,lt"]="r VAR ld ID and VAR rd"
+    ["81,ge"]="r VAR ld ID and VAR rd" ["81,le"]="r VAR ld ID and VAR rd"
+    ["81,strne"]="r VAR ld ID and VAR rd" ["81,streq"]="r VAR ld ID and VAR rd"
+    ["81,strgt"]="r VAR ld ID and VAR rd" ["81,strlt"]="r VAR ld ID and VAR rd"
+    ["81,strcm"]="r VAR ld ID and VAR rd" ["81,str"]="r VAR ld ID and VAR rd"
+    ["81,$"]="r VAR ld ID and VAR rd" ["82,ld"]="r VAR ld ID and STR rd"
+    ["82,cl"]="r VAR ld ID and STR rd" ["82,rd"]="r VAR ld ID and STR rd"
+    ["82,elif"]="r VAR ld ID and STR rd" ["82,else"]="r VAR ld ID and STR rd"
+    ["82,or"]="r VAR ld ID and STR rd" ["82,and"]="r VAR ld ID and STR rd"
+    ["82,rp"]="r VAR ld ID and STR rd" ["82,ne"]="r VAR ld ID and STR rd"
+    ["82,eq"]="r VAR ld ID and STR rd" ["82,gt"]="r VAR ld ID and STR rd"
+    ["82,lt"]="r VAR ld ID and STR rd" ["82,ge"]="r VAR ld ID and STR rd"
+    ["82,le"]="r VAR ld ID and STR rd" ["82,strne"]="r VAR ld ID and STR rd"
+    ["82,streq"]="r VAR ld ID and STR rd" ["82,strgt"]="r VAR ld ID and STR rd"
+    ["82,strlt"]="r VAR ld ID and STR rd" ["82,strcm"]="r VAR ld ID and STR rd"
+    ["82,str"]="r VAR ld ID and STR rd" ["82,$"]="r VAR ld ID and STR rd"
+    ["83,ld"]="r QUOTE ld quote cl ARGS rd" ["83,cl"]="r QUOTE ld quote cl ARGS rd"
+    ["83,rd"]="r QUOTE ld quote cl ARGS rd"
+    ["83,elif"]="r QUOTE ld quote cl ARGS rd"
+    ["83,else"]="r QUOTE ld quote cl ARGS rd"
+    ["83,or"]="r QUOTE ld quote cl ARGS rd" ["83,and"]="r QUOTE ld quote cl ARGS rd"
+    ["83,rp"]="r QUOTE ld quote cl ARGS rd" ["83,ne"]="r QUOTE ld quote cl ARGS rd"
+    ["83,eq"]="r QUOTE ld quote cl ARGS rd" ["83,gt"]="r QUOTE ld quote cl ARGS rd"
+    ["83,lt"]="r QUOTE ld quote cl ARGS rd" ["83,ge"]="r QUOTE ld quote cl ARGS rd"
+    ["83,le"]="r QUOTE ld quote cl ARGS rd"
+    ["83,strne"]="r QUOTE ld quote cl ARGS rd"
+    ["83,streq"]="r QUOTE ld quote cl ARGS rd"
+    ["83,strgt"]="r QUOTE ld quote cl ARGS rd"
+    ["83,strlt"]="r QUOTE ld quote cl ARGS rd"
+    ["83,strcm"]="r QUOTE ld quote cl ARGS rd"
+    ["83,str"]="r QUOTE ld quote cl ARGS rd" ["83,$"]="r QUOTE ld quote cl ARGS rd"
+    ["84,cl"]="r BOOLO BOOLO or UOP BOOLA" ["84,rd"]="r BOOLO BOOLO or UOP BOOLA"
+    ["84,or"]="r BOOLO BOOLO or UOP BOOLA" ["84,and"]="s 39"
+    ["84,rp"]="r BOOLO BOOLO or UOP BOOLA" ["85,cl"]="r BOOLA BOOLA and UOP BOOL"
+    ["85,rd"]="r BOOLA BOOLA and UOP BOOL" ["85,or"]="r BOOLA BOOLA and UOP BOOL"
+    ["85,and"]="r BOOLA BOOLA and UOP BOOL" ["85,rp"]="r BOOLA BOOLA and UOP BOOL"
+    ["86,ld"]="s 10" ["86,lp"]="s 23" ["86,ex"]="s 22" ["86,str"]="s 11"
+    ["86,STMT"]="26" ["86,IF"]="3" ["86,FORIN"]="4" ["86,INCLUDE"]="5"
+    ["86,BUILTIN"]="6" ["86,QUOTE"]="7" ["86,VAR"]="8" ["86,STR"]="9"
+    ["86,BOOLS"]="91" ["86,BOOLO"]="18" ["86,UOP"]="19" ["86,BOOLA"]="21"
+    ["86,BOOL"]="24" ["86,ARGS"]="25" ["87,rp"]="s 92" ["88,rd"]="r ELSE"
+    ["88,elif"]="s 94" ["88,else"]="s 95" ["88,ELSE"]="93" ["89,ld"]="s 10"
+    ["89,rd"]="s 96" ["89,str"]="s 11" ["89,STMT"]="2" ["89,IF"]="3"
+    ["89,FORIN"]="4" ["89,INCLUDE"]="5" ["89,BUILTIN"]="6" ["89,QUOTE"]="7"
+    ["89,VAR"]="8" ["89,STR"]="9" ["90,ld"]="r DOC" ["90,rd"]="r DOC"
+    ["90,str"]="r DOC" ["90,DOC"]="97" ["91,rp"]="s 98"
+    ["92,cl"]="r BOOLA BOOLA and lp BOOLS rp"
+    ["92,rd"]="r BOOLA BOOLA and lp BOOLS rp"
+    ["92,or"]="r BOOLA BOOLA and lp BOOLS rp"
+    ["92,and"]="r BOOLA BOOLA and lp BOOLS rp"
+    ["92,rp"]="r BOOLA BOOLA and lp BOOLS rp" ["93,rd"]="s 99" ["94,ld"]="s 10"
+    ["94,lp"]="s 23" ["94,ex"]="s 22" ["94,str"]="s 11" ["94,STMT"]="26"
+    ["94,IF"]="3" ["94,FORIN"]="4" ["94,INCLUDE"]="5" ["94,BUILTIN"]="6"
+    ["94,QUOTE"]="7" ["94,VAR"]="8" ["94,STR"]="9" ["94,BOOLS"]="100"
+    ["94,BOOLO"]="18" ["94,UOP"]="19" ["94,BOOLA"]="21" ["94,BOOL"]="24"
+    ["94,ARGS"]="25" ["95,cl"]="s 101" ["96,ld"]="r IF ld BOOLS cl DOC cl DOC rd"
+    ["96,cl"]="r IF ld BOOLS cl DOC cl DOC rd"
+    ["96,rd"]="r IF ld BOOLS cl DOC cl DOC rd"
+    ["96,elif"]="r IF ld BOOLS cl DOC cl DOC rd"
+    ["96,else"]="r IF ld BOOLS cl DOC cl DOC rd"
+    ["96,or"]="r IF ld BOOLS cl DOC cl DOC rd"
+    ["96,and"]="r IF ld BOOLS cl DOC cl DOC rd"
+    ["96,rp"]="r IF ld BOOLS cl DOC cl DOC rd"
+    ["96,ne"]="r IF ld BOOLS cl DOC cl DOC rd"
+    ["96,eq"]="r IF ld BOOLS cl DOC cl DOC rd"
+    ["96,gt"]="r IF ld BOOLS cl DOC cl DOC rd"
+    ["96,lt"]="r IF ld BOOLS cl DOC cl DOC rd"
+    ["96,ge"]="r IF ld BOOLS cl DOC cl DOC rd"
+    ["96,le"]="r IF ld BOOLS cl DOC cl DOC rd"
+    ["96,strne"]="r IF ld BOOLS cl DOC cl DOC rd"
+    ["96,streq"]="r IF ld BOOLS cl DOC cl DOC rd"
+    ["96,strgt"]="r IF ld BOOLS cl DOC cl DOC rd"
+    ["96,strlt"]="r IF ld BOOLS cl DOC cl DOC rd"
+    ["96,strcm"]="r IF ld BOOLS cl DOC cl DOC rd"
+    ["96,str"]="r IF ld BOOLS cl DOC cl DOC rd"
+    ["96,$"]="r IF ld BOOLS cl DOC cl DOC rd" ["97,ld"]="s 10" ["97,rd"]="s 102"
+    ["97,str"]="s 11" ["97,STMT"]="2" ["97,IF"]="3" ["97,FORIN"]="4"
+    ["97,INCLUDE"]="5" ["97,BUILTIN"]="6" ["97,QUOTE"]="7" ["97,VAR"]="8"
+    ["97,STR"]="9" ["98,cl"]="r BOOLA BOOLA and UOP lp BOOLS rp"
+    ["98,rd"]="r BOOLA BOOLA and UOP lp BOOLS rp"
+    ["98,or"]="r BOOLA BOOLA and UOP lp BOOLS rp"
+    ["98,and"]="r BOOLA BOOLA and UOP lp BOOLS rp"
+    ["98,rp"]="r BOOLA BOOLA and UOP lp BOOLS rp"
+    ["99,ld"]="r IF ld if BOOLS cl DOC ELIF ELSE rd"
+    ["99,cl"]="r IF ld if BOOLS cl DOC ELIF ELSE rd"
+    ["99,rd"]="r IF ld if BOOLS cl DOC ELIF ELSE rd"
+    ["99,elif"]="r IF ld if BOOLS cl DOC ELIF ELSE rd"
+    ["99,else"]="r IF ld if BOOLS cl DOC ELIF ELSE rd"
+    ["99,or"]="r IF ld if BOOLS cl DOC ELIF ELSE rd"
+    ["99,and"]="r IF ld if BOOLS cl DOC ELIF ELSE rd"
+    ["99,rp"]="r IF ld if BOOLS cl DOC ELIF ELSE rd"
+    ["99,ne"]="r IF ld if BOOLS cl DOC ELIF ELSE rd"
+    ["99,eq"]="r IF ld if BOOLS cl DOC ELIF ELSE rd"
+    ["99,gt"]="r IF ld if BOOLS cl DOC ELIF ELSE rd"
+    ["99,lt"]="r IF ld if BOOLS cl DOC ELIF ELSE rd"
+    ["99,ge"]="r IF ld if BOOLS cl DOC ELIF ELSE rd"
+    ["99,le"]="r IF ld if BOOLS cl DOC ELIF ELSE rd"
+    ["99,strne"]="r IF ld if BOOLS cl DOC ELIF ELSE rd"
+    ["99,streq"]="r IF ld if BOOLS cl DOC ELIF ELSE rd"
+    ["99,strgt"]="r IF ld if BOOLS cl DOC ELIF ELSE rd"
+    ["99,strlt"]="r IF ld if BOOLS cl DOC ELIF ELSE rd"
+    ["99,strcm"]="r IF ld if BOOLS cl DOC ELIF ELSE rd"
+    ["99,str"]="r IF ld if BOOLS cl DOC ELIF ELSE rd"
+    ["99,$"]="r IF ld if BOOLS cl DOC ELIF ELSE rd" ["100,cl"]="s 103"
+    ["101,ld"]="r DOC" ["101,rd"]="r DOC" ["101,str"]="r DOC" ["101,DOC"]="104"
+    ["102,ld"]="r FORIN ld for ID in ARGS cl DOC rd"
+    ["102,cl"]="r FORIN ld for ID in ARGS cl DOC rd"
+    ["102,rd"]="r FORIN ld for ID in ARGS cl DOC rd"
+    ["102,elif"]="r FORIN ld for ID in ARGS cl DOC rd"
+    ["102,else"]="r FORIN ld for ID in ARGS cl DOC rd"
+    ["102,or"]="r FORIN ld for ID in ARGS cl DOC rd"
+    ["102,and"]="r FORIN ld for ID in ARGS cl DOC rd"
+    ["102,rp"]="r FORIN ld for ID in ARGS cl DOC rd"
+    ["102,ne"]="r FORIN ld for ID in ARGS cl DOC rd"
+    ["102,eq"]="r FORIN ld for ID in ARGS cl DOC rd"
+    ["102,gt"]="r FORIN ld for ID in ARGS cl DOC rd"
+    ["102,lt"]="r FORIN ld for ID in ARGS cl DOC rd"
+    ["102,ge"]="r FORIN ld for ID in ARGS cl DOC rd"
+    ["102,le"]="r FORIN ld for ID in ARGS cl DOC rd"
+    ["102,strne"]="r FORIN ld for ID in ARGS cl DOC rd"
+    ["102,streq"]="r FORIN ld for ID in ARGS cl DOC rd"
+    ["102,strgt"]="r FORIN ld for ID in ARGS cl DOC rd"
+    ["102,strlt"]="r FORIN ld for ID in ARGS cl DOC rd"
+    ["102,strcm"]="r FORIN ld for ID in ARGS cl DOC rd"
+    ["102,str"]="r FORIN ld for ID in ARGS cl DOC rd"
+    ["102,$"]="r FORIN ld for ID in ARGS cl DOC rd" ["103,ld"]="r DOC"
+    ["103,rd"]="r DOC" ["103,elif"]="r DOC" ["103,else"]="r DOC" ["103,str"]="r DOC"
+    ["103,DOC"]="105" ["104,ld"]="s 10" ["104,rd"]="r ELSE else cl DOC"
+    ["104,str"]="s 11" ["104,STMT"]="2" ["104,IF"]="3" ["104,FORIN"]="4"
+    ["104,INCLUDE"]="5" ["104,BUILTIN"]="6" ["104,QUOTE"]="7" ["104,VAR"]="8"
+    ["104,STR"]="9" ["105,ld"]="s 10" ["105,rd"]="r ELIF ELIF elif BOOLS cl DOC"
+    ["105,elif"]="r ELIF ELIF elif BOOLS cl DOC"
+    ["105,else"]="r ELIF ELIF elif BOOLS cl DOC" ["105,str"]="s 11" ["105,STMT"]="2"
+    ["105,IF"]="3" ["105,FORIN"]="4" ["105,INCLUDE"]="5" ["105,BUILTIN"]="6"
+    ["105,QUOTE"]="7" ["105,VAR"]="8" ["105,STR"]="9"
+) # }}}
+# <<< BPT_PARSE_TABLE_E <<<
+
+return 0 2>/dev/null || bpt.main "$@"
