@@ -480,6 +480,7 @@ bpt.__reduce_generate() {
         local builtin_name=${contents[$((s + 1))]%:*:*}
         case "$builtin_name" in
         len | seq | split) contents[$s]="\$($builtin_name ${contents[$((s + 3))]})" ;;
+        cat) contents[$s]="\$(e ${contents[$((s + 3))]})" ;;
         *) # Extract and compute correct error location from ID
             local line_col="${contents[$((s + 1))]#"$builtin_name"}"
             local err_line=${line_col%:*} && err_line="${err_line:1}"
@@ -797,6 +798,7 @@ bpt.print_help() {
     echo "  Builtin functions"
     echo '    {{ seq: "5" }}'
     echo '    {{ len: "abc" }}'
+    echo '    {{ cat: "1" "2" "3" }}'
     echo '    {{ quote: {{seq: "1" "2" "5"}} }}'
     echo '    {{ split: "1 2 3" }}'
     echo

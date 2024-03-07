@@ -267,7 +267,18 @@ test_builtin() {
     assert_equals '1 2 3.' "$(gen '{{for i in "1 2 3": {{i}}"."}}')"
     assert_equals '1.2.3.' "$(gen '{{for i in {{split: "1 2 3"}}: {{i}}"."}}')"
     assert_equals '{{' "$(gen '{{quote: "{{"}}')"
+
+}
+
+test_quoting() {
     assert_equals '2 33' "$(gen '{{quote: "2 3" "3" }}')"
+    assert_equals '2 33,' "$(gen '{{for i in {{quote: "2 3" "3" }}: {{i}}","}}')"
+
+    assert_equals '2 33' "$(gen '{{cat: "2 3" "3" }}')"
+    assert_equals '2,33,' "$(gen '{{for i in {{cat: "2 3" "3" }}: {{i}}","}}')"
+
+    assert_equals '2 3 3' "$(gen '{{split: "2 3" "3" }}')"
+    assert_equals '2,3,3,' "$(gen '{{for i in {{split: "2 3" "3" }}: {{i}}","}}')"
 }
 
 # shellcheck disable=SC2034
