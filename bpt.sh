@@ -812,7 +812,7 @@ bpt.print_help() {
     echo "  https://github.com/husixu1/bpt"
 }
 
-bpt.main() (
+bpt.__clean_env() {
     # Clean the environment to avoid builtin overrides
     # See https://unix.stackexchange.com/questions/188327
     POSIXLY_CORRECT=1
@@ -821,7 +821,11 @@ bpt.main() (
     while \read -r cmd; do
         [[ "$cmd" =~ ^([a-z:.\[]+): ]] && \unset -f "${BASH_REMATCH[1]}"
     done < <(\help -s "*")
+    declare -rg __BPT_ENV_CLEANED=1
+}
 
+bpt.main() (
+    [[ $__BPT_ENV_CLEANED ]] || bpt.__clean_env # Clean the environment once
     local ld='{{' rd='}}'
     local infile=''
     local cmd='' reduce_fn=bpt.__reduce_generate post_process=eval
