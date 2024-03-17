@@ -787,10 +787,16 @@ bpt.print_help() {
     echo "    bpt -l \"<<\" -r \">>\" g input.tpl > output.sh"
     echo
     echo -e "\033[1mTEMPLATE GRAMMAR EXAMPLES\033[0m"
-    echo "  Variable replacements"
+    echo "  Variable modding"
     echo '    {{ var }}'
     echo '    {{ var or "abc" }}'
-    echo '    {{ var or {{var2}} }}'
+    echo '    {{ var %% {{var2}} }}'
+    echo
+    echo '    Available modifiers are: '
+    echo '      replacement: and or :- :+ '
+    echo '      non-empty:   :?'
+    echo '      pre/suf-fix: ##  #  %%  %'
+    echo '      upper/lower: ^^  ^  ,,  ,'
     echo
     echo "  Branching"
     echo '    {{ {{x}}: {{var1}} : {{var2}} }}'

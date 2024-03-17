@@ -65,14 +65,28 @@ BPT employs a straightforward grammar whereby any content beyond the top-level d
 
 ## Examples
 
-### Variable Replacement
+### Variable Modding
 
 ```
 {{var}}
 {{var or "abc"}}      # Use "abc" if var is empty
 {{var or {{var2}}}}   # Use {{var2}} if var is empty
+{{var :- "abc"}}      # Alias to {{var or "abc"}}
+
 {{var and "abc"}}     # Use "abc" if var is not empty
 {{var and {{var2}}}}  # Use {{var2}} if var is not empty
+{{var :+ "abc"}}      # Alias to {{var and "abc"}}
+
+{{var :? "Err msg"}} # Abort rendering when varaible is empty
+
+{{var % "*:"}}        # Remove prefix until first ':'
+{{var %% "*:"}}       # Remove prefix until last ':'
+{{var # ":*"}}        # Remove suffix from last ':'
+{{var ## ":*"}}       # Remove suffix from first ':'
+{{var ^}}             # Uppercase the first character
+{{var ^^}}            # Uppercase all characters
+{{var ,}}             # Lowercase the first character
+{{var ,,}}            # Lowercase all characters
 ```
 
 Bash internal variables can also be used:
@@ -224,12 +238,14 @@ QUOTE   -> ld quote cl ARGS rd .
 ARGS    -> ARGS STMT
          | STMT .
 VAR     -> ld ID rd
-         | ld ID or VAR rd
-         | ld ID or STR rd
-         | ld ID and VAR rd
-         | ld ID and STR rd .
-BOP     -> ne     | eq    | gt    | lt    | ge    | le
-         | strne  | streq | strgt | strlt | strcm .
+         | ld ID MOD rd
+         | ld ID MOD VAR rd
+         | ld ID MOD STR rd .
+MOD     -> and   | or    | err
+         | pfx   | ppfx  | sfx   | ssfx
+         | upp   | uupp  | low   | llow  .
+BOP     -> ne    | eq    | gt    | lt    | ge    | le
+         | strne | streq | strgt | strlt | strcm .
 UOP     -> ex .
 ID      -> id .
 STR     -> str .
