@@ -119,6 +119,8 @@ test_var() {
     # var names starting/ending with keywords such as 'in' an 'or'
     local instance=123 orange='orange' actor='actor'
     assert_equals "$instance" "$(gen '{{instance}}')"
+    assert_equals "$instance" "$(gen '{{instance or }}')"
+    assert_eauals '' "$(gen '{{instance and }}')"
     assert_equals "$orange" "$(gen '{{orange or "cat"}}')"
     assert_equals "$actor" "$(gen '{{actor or "cat"}}')"
 }
@@ -128,8 +130,14 @@ test_default_var() {
     assert_equals 100 "$(gen '{{var0 or {{var1}}}}')"
     assert_equals 100 "$(gen '{{var1 or {{var2}}}}')"
 
+    assert_equals 100 "$(gen '{{var0:-{{var1}}}}')"
+    assert_equals 100 "$(gen '{{var1 :- {{var2}}}}')"
+
     assert_equals '' "$(gen '{{var0 and {{var1}}}}')"
     assert_equals abc "$(gen '{{var1 and {{var2}}}}')"
+
+    assert_equals '' "$(gen '{{var0:+ {{var1}}}}')"
+    assert_equals abc "$(gen '{{var1 :+{{var2}}}}')"
 
     assert_equals 123 "$(gen '{{var0 or "123"}}')"
     assert_equals 100 "$(gen '{{var1 or "123"}}')"
@@ -139,6 +147,33 @@ test_default_var() {
 
     assert_equals abc "$(gen '{{var1 and {{var0 or {{var2}}}}}}')"
     assert_equals 100 "$(gen '{{var0 or {{var1 or "abc"}}}}')"
+}
+
+test_modded_vars() {
+    local var0='' var1=100 var2=aabbcc var3=ABC
+    assert_fail 'gen "{{var0:?}}"'
+    assert_fail 'gen "{{var0 :? }}"'
+    assert_fail 'gen "{{var0 :? "Something wrong"}}"'
+    assert_fail 'gen "{{len: {{len: {{var0 :? "Something wrong"}}}}}}"'
+    assert_matches '.*Something wrong.*' "$(gen '{{var0 :? "Something wrong"}}' 2>&1)"
+    assert_equals 100 "$(gen '{{var1 :? "Something wrong"}}')"
+
+    assert_equals 'abbcc' "$(gen '{{var2 # "*a"}}')"
+    assert_equals 'bbcc' "$(gen '{{var2 ## "*a"}}')"
+
+    assert_equals 'aabbc' "$(gen '{{var2 % "c*"}}')"
+    assert_equals 'aabb' "$(gen '{{var2 %% "c*"}}')"
+
+    assert_equals 'Aabbcc' "$(gen '{{var2 ^ }}')"
+    assert_equals 'AABBCC' "$(gen '{{var2 ^^ }}')"
+
+    assert_equals 'Aabbcc' "$(gen '{{var2 ^ "a"}}')"
+    assert_equals 'AAbbcc' "$(gen '{{var2 ^^ "a"}}')"
+
+    assert_equals 'aBC' "$(gen '{{var3 , }}')"
+    assert_equals 'abc' "$(gen '{{var3 ,, }}')"
+
+    assert_equals 'aBC' "$(gen '{{var3 ,, "A"}}')"
 }
 
 test_bool_basics() {
@@ -328,8 +363,6 @@ EOF
 test_illegal_var() {
     local var0='' var1=100
     assert_fail 'gen "{{var0"'
-    assert_fail 'gen "{{var0 or }}"'
-    assert_fail 'gen "{{var0 and }}"'
     assert_fail "gen '"'{{var0 and "asdf" "adsf"}}'"'"
 }
 
