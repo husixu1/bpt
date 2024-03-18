@@ -689,10 +689,10 @@ bpt.fingerprint() {
     # Collect vars and includes
     local -a vars=() incs=()
     local var_list inc_list
-    var_list="$(bpt.process "$ld" "$rd" bpt.__reduce_collect_vars "$infile" "$debug")" || exit 1
+    var_list="$(bpt.process "$ld" "$rd" bpt.__reduce_collect_vars "$file" "$debug")" || exit 1
     var_list="$(bpt.__dedup "$var_list")"
     [[ -z $var_list ]] || mapfile -t vars <<<"$var_list"
-    inc_list="$(bpt.process "$ld" "$rd" bpt.__reduce_collect_includes "$infile" "$debug")" || exit 1
+    inc_list="$(bpt.process "$ld" "$rd" bpt.__reduce_collect_includes "$file" "$debug")" || exit 1
     inc_list="$(bpt.__dedup "$inc_list")"
     [[ -z $inc_list ]] || mapfile -t incs <<<"$inc_list"
     local fingerprint=''
