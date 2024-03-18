@@ -824,7 +824,7 @@ bpt.print_help() {
     echo
     echo -e "\033[1mCOPYRIGHT\033[0m"
     echo "  MIT License."
-    echo "  Copyright (c) 2023 Hu Sixu."
+    echo "  Copyright (c) 2023-2024 Hu Sixu."
     echo "  https://github.com/husixu1/bpt"
 }
 
