@@ -4,7 +4,7 @@
 
 # Import once
 [[ -z $__BPT_VERSION ]] || return
-readonly __BPT_VERSION="v0.2"
+readonly __BPT_VERSION="v0.3"
 
 # The shift-reduce LR(1) parser.
 # $1: Parse table name.
